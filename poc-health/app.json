@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "POC Health",
+    "slug": "poc-health",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFF7F5"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.pochealth.app",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
+        "NSBluetoothPeripheralUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFF7F5"
+      },
+      "package": "com.pochealth.app",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["peripheral", "central"],
+          "bluetoothAlwaysPermission": "Allow POC Health to connect to your POC device"
+        }
+      ]
+    ],
+    "scheme": "poc-health"
+  }
+}
