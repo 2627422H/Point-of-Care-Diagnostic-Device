@@ -63,7 +63,10 @@ const styles = StyleSheet.create({
   severity: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    width: 60,
+    minWidth: 90,
     textAlign: 'right',
+    flexShrink: 0,
+    justifyContent : 'space-between',
+    alignItems: 'center',
   },
 });
