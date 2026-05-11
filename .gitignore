@@ -1,0 +1,7 @@
+CameraBLE/build/
+CameraBLE/sdkconfig
+CameraBLE/managed_components/
+CameraBLE/esp-idf/
+CameraBLE/venv/
+CameraBLE/frames/
+.DS_Store
