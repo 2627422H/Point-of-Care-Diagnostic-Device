@@ -1,8 +1,6 @@
 # Point-of-Care-Diagnostic-Device
 
-#CameraBLE
-
-# ESP32-P4-NANO BLE Camera Streaming
+# CameraBLE
 
 BLE camera streaming project for the **ESP32-P4-NANO**.  
 Captures frames from an **OV5647 MIPI CSI-2 camera**, JPEG-encodes them using the ESP32-P4 hardware encoder, and streams them over BLE to a Mac (or any BLE central) using **NimBLE** via the onboard **ESP32-C6** co-processor.
