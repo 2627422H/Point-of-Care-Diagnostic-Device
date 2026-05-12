@@ -106,13 +106,16 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: Colors.background,
-    padding: Spacing.md,
-    gap: Spacing.md,
+    paddingHorizontal: 24,
+    paddingTop: Spacing.lg,
+    gap: Spacing.lg,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
   },
   brand: {
     fontSize: FontSize.lg,
@@ -124,11 +127,13 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.cardBackground,
     borderRadius: Radius.lg,
     overflow: 'hidden',
+    marginHorizontal: 16,
   },
   statusBox: {
     flex: 1,
-    padding: Spacing.md,
-    gap: 6,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
+    gap: 10,
     backgroundColor: Colors.sectionBackground,
   },
   statusLabel: {
@@ -137,7 +142,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statusValue: {
-    fontSize: FontSize.xl,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '700',
     color: Colors.text,
   },
@@ -162,8 +168,10 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: Colors.sectionBackground,
     borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.md,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.lg,
+    marginHorizontal: 16,
   },
   cardTitle: {
     fontSize: FontSize.lg,
