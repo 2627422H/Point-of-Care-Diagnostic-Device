@@ -1,0 +1,15 @@
+# Build artefacts
+build/
+sdkconfig          # generated from sdkconfig.defaults – do not commit
+
+# IDF Component Manager downloads (regenerated with `idf.py update-dependencies`)
+managed_components/
+
+# Python virtual environment used by receive_frames.py
+venv/
+
+# Captured frame files
+frames/
+
+# macOS
+.DS_Store

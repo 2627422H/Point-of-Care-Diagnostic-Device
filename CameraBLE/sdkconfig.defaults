@@ -1,0 +1,73 @@
+# Target
+CONFIG_IDF_TARGET="esp32p4"
+
+# ── PSRAM ──────────────────────────────────────────────────────────────────
+# ESP32-P4-NANO uses octal PSRAM
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=n
+
+# ── Flash ───────────────────────────────────────────────────────────────────
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=n
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# ── FreeRTOS ────────────────────────────────────────────────────────────────
+CONFIG_FREERTOS_HZ=1000
+# Run NimBLE on core 0, camera on core 1
+CONFIG_FREERTOS_UNICORE=n
+
+# ── Bluetooth / NimBLE ─────────────────────────────────────────────────────
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y        # Controller lives on C6, not P4
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+# NimBLE will use the HCI transport provided by esp_hosted/esp_wifi_remote
+
+# ── ESP-Hosted / WiFi-Remote (for C6 BLE via SDIO) ─────────────────────────
+# These Kconfig options are provided by the espressif/esp_hosted managed
+# component. Run "idf.py menuconfig" to verify the exact symbol names for
+# your version, then adjust here.
+#
+# SDIO pin mapping for ESP32-P4-NANO (P4 host ↔ C6 slave):
+#   CMD  = GPIO14
+#   CLK  = GPIO15
+#   D0   = GPIO16
+#   D1   = GPIO17
+#   D2   = GPIO18
+#   D3   = GPIO19
+#   RST  = GPIO54
+#
+CONFIG_ESP_HOSTED_ENABLED=y
+CONFIG_ESP_HOSTED_SLAVE_CHIPSET_ESP32C6=y
+CONFIG_ESP_HOSTED_TRANSPORT_SDIO=y
+# Enable NimBLE BT over Hosted (default is n, must be explicit)
+CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
+CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+CONFIG_SLAVE_RESET_GPIO=54
+CONFIG_SLAVE_SDIO_CMD_GPIO=14
+CONFIG_SLAVE_SDIO_CLK_GPIO=15
+CONFIG_SLAVE_SDIO_D0_GPIO=16
+CONFIG_SLAVE_SDIO_D1_GPIO=17
+CONFIG_SLAVE_SDIO_D2_GPIO=18
+CONFIG_SLAVE_SDIO_D3_GPIO=19
+
+# ── NVS ─────────────────────────────────────────────────────────────────────
+CONFIG_NVS_ENCRYPTION=n
+
+# ── Camera sensor ───────────────────────────────────────────────────────────
+CONFIG_CAMERA_OV5647=y
+CONFIG_CAMERA_OV5647_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
+CONFIG_CAMERA_OV5647_MIPI_RAW8_800X640_50FPS=y
+# Leave CSI_LINESYNC at default (y) — driver uses it as an integer literal
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ── Stack sizes ─────────────────────────────────────────────────────────────
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=5120
