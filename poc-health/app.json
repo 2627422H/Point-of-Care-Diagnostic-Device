@@ -20,6 +20,7 @@
         "NSBluetoothPeripheralUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
         "NSLocalNetworkUsageDescription": "POC Health connects to the diagnostic device camera on your local network.",
         "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
           "NSAllowsLocalNetworking": true
         }
       }
