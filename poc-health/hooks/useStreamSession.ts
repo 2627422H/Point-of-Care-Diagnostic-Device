@@ -62,12 +62,14 @@ async function requestAndroidPermissions(): Promise<boolean> {
 }
 
 export function useStreamSession() {
-  const [phase, setPhase]           = useState<StreamPhase>('idle');
-  const [streamUrl, setStreamUrl]   = useState<string | null>(null);
+  const [phase, setPhase]               = useState<StreamPhase>('idle');
+  const [streamUrl, setStreamUrl]       = useState<string | null>(null);
+  const [frameCount, setFrameCount]     = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
+  const streamStartRef = useRef<number>(0);
 
-  const cancelledRef = useRef(false);
-  const deviceRef    = useRef<any>(null);
+  const cancelledRef   = useRef(false);
+  const deviceRef      = useRef<any>(null);
 
   function safeSetPhase(p: StreamPhase) {
     if (!cancelledRef.current) setPhase(p);
@@ -100,7 +102,7 @@ export function useStreamSession() {
     safeSetPhase('connecting');
     await delay(1000);
     if (cancelledRef.current) return;
-    // No real device — stream URL stays null; LiveCamera won't render.
+    streamStartRef.current = Date.now();
     safeSetPhase('streaming');
   }
 
@@ -140,6 +142,7 @@ export function useStreamSession() {
 
       if (cancelledRef.current) return;
       safeSetPhase('connecting');
+      streamStartRef.current = Date.now();
       setStreamUrl(`http://${ip}/stream`);
       safeSetPhase('streaming');
     } catch (err: any) {
@@ -154,6 +157,7 @@ export function useStreamSession() {
   const start = useCallback(async () => {
     cancelledRef.current = false;
     setStreamUrl(null);
+    setFrameCount(0);
     setErrorMessage('');
     safeSetPhase('scanning');
 
@@ -247,8 +251,20 @@ export function useStreamSession() {
     deviceRef.current = null;
     setPhase('idle');
     setStreamUrl(null);
+    setFrameCount(0);
     setErrorMessage('');
   }, []);
 
-  return { phase, streamUrl, errorMessage, start, stop, reset, submitWifiCredentials };
+  const handleFrame = useCallback(() => {
+    setFrameCount((n) => n + 1);
+  }, []);
+
+  const fps = frameCount > 0
+    ? (frameCount / ((Date.now() - streamStartRef.current) / 1000)).toFixed(1)
+    : '0.0';
+
+  return {
+    phase, streamUrl, frameCount, fps, errorMessage,
+    start, stop, reset, submitWifiCredentials, handleFrame,
+  };
 }

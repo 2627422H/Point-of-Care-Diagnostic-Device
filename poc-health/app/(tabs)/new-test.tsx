@@ -16,7 +16,7 @@ import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
-import LiveCamera from '../../components/LiveCamera';
+import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 
 const PHASE_LABEL: Record<StreamPhase, string> = {
   idle:         'READY',
@@ -44,11 +44,14 @@ export default function NewTestScreen() {
   const {
     phase,
     streamUrl,
+    frameCount,
+    fps,
     errorMessage,
     start,
     stop,
     reset,
     submitWifiCredentials,
+    handleFrame,
   } = useStreamSession();
 
   const [ssid, setSsid] = useState('');
@@ -186,9 +189,41 @@ export default function NewTestScreen() {
             </View>
           )}
 
-          {/* Live camera frame */}
+          {/* Hidden frame counter — parses MJPEG stream, notifies on each frame */}
           {isStreaming && streamUrl && (
-            <LiveCamera streamUrl={streamUrl} />
+            <MjpegAnalyzer
+              streamUrl={streamUrl}
+              onFrame={handleFrame}
+              onError={(msg) => console.warn('Stream error:', msg)}
+            />
+          )}
+
+          {/* Stream debug panel */}
+          {isStreaming && (
+            <View style={styles.debugCard}>
+              <View style={styles.debugRow}>
+                <Ionicons name="bluetooth" size={16} color={Colors.primary} />
+                <Text style={styles.debugLabel}>BLE</Text>
+                <Text style={styles.debugValue}>Connected</Text>
+              </View>
+              <View style={styles.debugRow}>
+                <Ionicons name="wifi" size={16} color={Colors.primary} />
+                <Text style={styles.debugLabel}>Stream URL</Text>
+                <Text style={styles.debugValue} numberOfLines={1}>
+                  {streamUrl ?? 'waiting…'}
+                </Text>
+              </View>
+              <View style={styles.debugRow}>
+                <Ionicons name="film-outline" size={16} color={Colors.primary} />
+                <Text style={styles.debugLabel}>Frames</Text>
+                <Text style={styles.debugValue}>{frameCount}</Text>
+              </View>
+              <View style={styles.debugRow}>
+                <Ionicons name="speedometer-outline" size={16} color={Colors.primary} />
+                <Text style={styles.debugLabel}>FPS</Text>
+                <Text style={styles.debugValue}>{fps}</Text>
+              </View>
+            </View>
           )}
 
           {/* Error message */}
@@ -357,6 +392,28 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#fff',
     letterSpacing: 1,
+  },
+  debugCard: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  debugRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  debugLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    width: 90,
+  },
+  debugValue: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.text,
   },
   errorCard: {
     backgroundColor: Colors.cardBackground,
