@@ -1,17 +1,26 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize } from '../../constants/theme';
 
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const TAB_ICONS: Record<string, IoniconName> = {
+  index: 'stats-chart',
+  'new-test': 'add-circle',
+  history: 'time',
+  profile: 'person',
+  help: 'help-circle',
+};
+
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  const icons: Record<string, string> = {
-    index: '📊',
-    'new-test': '＋',
-    profile: '👤',
-  };
+  const iconName = TAB_ICONS[name] ?? 'ellipse';
   return (
-    <Text style={{ fontSize: name === 'new-test' ? 22 : 18, opacity: focused ? 1 : 0.6 }}>
-      {icons[name]}
-    </Text>
+    <Ionicons
+      name={iconName}
+      size={name === 'new-test' ? 26 : 22}
+      color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
+    />
   );
 }
 
@@ -29,7 +38,9 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'RESULTS' }} />
       <Tabs.Screen name="new-test" options={{ title: 'NEW TEST' }} />
+      <Tabs.Screen name="history" options={{ title: 'HISTORY' }} />
       <Tabs.Screen name="profile" options={{ title: 'PROFILE' }} />
+      <Tabs.Screen name="help" options={{ title: 'HELP' }} />
     </Tabs>
   );
 }

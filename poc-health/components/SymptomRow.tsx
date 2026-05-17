@@ -1,7 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius, FontSize } from '../constants/theme';
 import type { Symptom } from '../types';
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const severityColor: Record<string, string> = {
   None: Colors.textMuted,
@@ -17,7 +20,7 @@ interface Props {
 export default function SymptomRow({ symptom }: Props) {
   return (
     <View style={styles.row}>
-      <Text style={styles.icon}>{symptom.icon}</Text>
+      <Ionicons name={symptom.icon as IoniconName} size={20} color={severityColor[symptom.severity]} style={styles.icon} />
       <View style={styles.info}>
         <Text style={styles.name}>{symptom.name}</Text>
         <View style={styles.track}>
@@ -37,7 +40,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   icon: {
-    fontSize: 18,
     width: 26,
     textAlign: 'center',
   },
