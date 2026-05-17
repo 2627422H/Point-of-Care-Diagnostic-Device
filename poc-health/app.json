@@ -17,7 +17,11 @@
       "bundleIdentifier": "com.pochealth.app",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
-        "NSBluetoothPeripheralUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results."
+        "NSBluetoothPeripheralUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
+        "NSLocalNetworkUsageDescription": "POC Health connects to the diagnostic device camera on your local network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
@@ -32,7 +36,9 @@
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.INTERNET"
       ]
     },
     "web": {
