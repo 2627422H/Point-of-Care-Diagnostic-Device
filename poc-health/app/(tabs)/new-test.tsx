@@ -47,11 +47,14 @@ export default function NewTestScreen() {
     frameCount,
     fps,
     errorMessage,
+    streamError,
+    bleMode,
     start,
     stop,
     reset,
     submitWifiCredentials,
     handleFrame,
+    handleStreamError,
   } = useStreamSession();
 
   const [ssid, setSsid] = useState('');
@@ -194,7 +197,7 @@ export default function NewTestScreen() {
             <MjpegAnalyzer
               streamUrl={streamUrl}
               onFrame={handleFrame}
-              onError={(msg) => console.warn('Stream error:', msg)}
+              onError={handleStreamError}
             />
           )}
 
@@ -203,14 +206,14 @@ export default function NewTestScreen() {
             <View style={styles.debugCard}>
               <View style={styles.debugRow}>
                 <Ionicons name="bluetooth" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>BLE</Text>
-                <Text style={styles.debugValue}>Connected</Text>
+                <Text style={styles.debugLabel}>Mode</Text>
+                <Text style={styles.debugValue}>{bleMode ? 'BLE (real)' : 'Mock (no device)'}</Text>
               </View>
               <View style={styles.debugRow}>
                 <Ionicons name="wifi" size={16} color={Colors.primary} />
                 <Text style={styles.debugLabel}>Stream URL</Text>
                 <Text style={styles.debugValue} numberOfLines={1}>
-                  {streamUrl ?? 'waiting…'}
+                  {streamUrl ?? 'not received'}
                 </Text>
               </View>
               <View style={styles.debugRow}>
@@ -223,6 +226,15 @@ export default function NewTestScreen() {
                 <Text style={styles.debugLabel}>FPS</Text>
                 <Text style={styles.debugValue}>{fps}</Text>
               </View>
+              {streamError && (
+                <View style={styles.debugRow}>
+                  <Ionicons name="alert-circle-outline" size={16} color={Colors.primaryDark} />
+                  <Text style={[styles.debugLabel, { color: Colors.primaryDark }]}>Error</Text>
+                  <Text style={[styles.debugValue, { color: Colors.primaryDark }]} numberOfLines={2}>
+                    {streamError}
+                  </Text>
+                </View>
+              )}
             </View>
           )}
 
