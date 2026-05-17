@@ -16,7 +16,6 @@ import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
-import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 
 const PHASE_LABEL: Record<StreamPhase, string> = {
   idle:         'READY',
@@ -48,13 +47,12 @@ export default function NewTestScreen() {
     fps,
     errorMessage,
     streamError,
+    connectStatus,
     bleMode,
     start,
     stop,
     reset,
     submitWifiCredentials,
-    handleFrame,
-    handleStreamError,
   } = useStreamSession();
 
   const [ssid, setSsid] = useState('');
@@ -192,29 +190,23 @@ export default function NewTestScreen() {
             </View>
           )}
 
-          {/* Hidden frame counter — parses MJPEG stream, notifies on each frame */}
-          {isStreaming && streamUrl && (
-            <MjpegAnalyzer
-              streamUrl={streamUrl}
-              onFrame={handleFrame}
-              onError={handleStreamError}
-            />
-          )}
-
           {/* Stream debug panel */}
           {isStreaming && (
             <View style={styles.debugCard}>
               <View style={styles.debugRow}>
                 <Ionicons name="bluetooth" size={16} color={Colors.primary} />
                 <Text style={styles.debugLabel}>Mode</Text>
-                <Text style={styles.debugValue}>{bleMode ? 'BLE (real)' : 'Mock (no device)'}</Text>
+                <Text style={styles.debugValue}>{bleMode ? 'BLE (real)' : 'Mock'}</Text>
               </View>
               <View style={styles.debugRow}>
                 <Ionicons name="wifi" size={16} color={Colors.primary} />
                 <Text style={styles.debugLabel}>Stream URL</Text>
-                <Text style={styles.debugValue} numberOfLines={1}>
-                  {streamUrl ?? 'not received'}
-                </Text>
+                <Text style={styles.debugValue} numberOfLines={1}>{streamUrl ?? 'not received'}</Text>
+              </View>
+              <View style={styles.debugRow}>
+                <Ionicons name="checkmark-circle-outline" size={16} color={Colors.primary} />
+                <Text style={styles.debugLabel}>HTTP</Text>
+                <Text style={styles.debugValue}>{connectStatus ?? 'connecting…'}</Text>
               </View>
               <View style={styles.debugRow}>
                 <Ionicons name="film-outline" size={16} color={Colors.primary} />

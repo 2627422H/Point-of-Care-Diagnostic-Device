@@ -21,6 +21,7 @@
         "NSLocalNetworkUsageDescription": "POC Health connects to the diagnostic device camera on your local network.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
+          "NSAllowsArbitraryLoadsInWebContent": true,
           "NSAllowsLocalNetworking": true
         }
       }

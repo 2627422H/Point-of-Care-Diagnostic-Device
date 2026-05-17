@@ -20,7 +20,9 @@ const PASS_UUID    = 'fb349b5f-8000-0080-0010-000000000012';
 const IP_UUID      = 'fb349b5f-8000-0080-0010-000000000013';
 const WIFI_KEY     = 'poc_wifi_credentials';
 
-// Lazy singleton — avoids crashing at module load in Expo Go.
+// MJPEG frame boundary written by wifi_stream.c
+const MJPEG_BOUNDARY = '--frame';
+
 let _ble: import('react-native-ble-plx').BleManager | null = null;
 function getBle(): import('react-native-ble-plx').BleManager | null {
   if (_ble) return _ble;
@@ -33,7 +35,6 @@ function getBle(): import('react-native-ble-plx').BleManager | null {
   }
 }
 
-// Safe ASCII base64 — covers all normal WiFi SSIDs and passwords.
 function strToBase64(str: string): string {
   return btoa(
     encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, hex) =>
@@ -70,22 +71,78 @@ async function requestAndroidPermissions(): Promise<boolean> {
 }
 
 export function useStreamSession() {
-  const [phase, setPhase]               = useState<StreamPhase>('idle');
-  const [streamUrl, setStreamUrl]       = useState<string | null>(null);
-  const [frameCount, setFrameCount]     = useState(0);
+  const [phase, setPhase]             = useState<StreamPhase>('idle');
+  const [streamUrl, setStreamUrl]     = useState<string | null>(null);
+  const [frameCount, setFrameCount]   = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
-  const [streamError, setStreamError]   = useState<string | null>(null);
-  // bleMode: true = real BLE connected, false = mock/fallback
-  const [bleMode, setBleMode]           = useState(false);
-  const streamStartRef                  = useRef<number>(0);
-  const cancelledRef                    = useRef(false);
-  const deviceRef                       = useRef<any>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [connectStatus, setConnectStatus] = useState<string | null>(null);
+  const [bleMode, setBleMode]         = useState(false);
+
+  const streamStartRef = useRef<number>(0);
+  const cancelledRef   = useRef(false);
+  const deviceRef      = useRef<any>(null);
+  const xhrRef         = useRef<XMLHttpRequest | null>(null);
+  const frameCountRef  = useRef(0);
+  const xhrOffsetRef   = useRef(0);
 
   function safeSetPhase(p: StreamPhase) {
     if (!cancelledRef.current) setPhase(p);
   }
 
-  // ── Mock flow (Expo Go / no native BLE) ─────────────────────────────────────
+  // ── XHR stream reader (runs in RN, no WebView needed) ───────────────────────
+  function startXhrStream(url: string) {
+    const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
+    frameCountRef.current = 0;
+    xhrOffsetRef.current = 0;
+
+    xhr.open('GET', url, true);
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState === 2) {
+        // Headers received — connection succeeded.
+        setConnectStatus(`HTTP ${xhr.status}`);
+      }
+    };
+
+    xhr.onprogress = () => {
+      const text = xhr.responseText;
+      const chunk = text.slice(xhrOffsetRef.current);
+      xhrOffsetRef.current = text.length;
+
+      // Count each MJPEG boundary as one complete frame.
+      let pos = 0;
+      while (pos < chunk.length) {
+        const idx = chunk.indexOf(MJPEG_BOUNDARY, pos);
+        if (idx === -1) break;
+        frameCountRef.current += 1;
+        setFrameCount(frameCountRef.current);
+        pos = idx + MJPEG_BOUNDARY.length;
+      }
+    };
+
+    xhr.onerror = () => {
+      setStreamError(`Connection failed (HTTP ${xhr.status || 'no response'})`);
+      setConnectStatus('Failed');
+    };
+
+    xhr.ontimeout = () => {
+      setStreamError('Connection timed out');
+      setConnectStatus('Timeout');
+    };
+
+    xhr.send();
+  }
+
+  function stopXhr() {
+    if (xhrRef.current) {
+      xhrRef.current.abort();
+      xhrRef.current = null;
+    }
+  }
+
+  // ── Mock flow ────────────────────────────────────────────────────────────────
   async function mockFlow() {
     await delay(2000);
     if (cancelledRef.current) return;
@@ -109,7 +166,7 @@ export function useStreamSession() {
     await delay(1000);
     if (cancelledRef.current) return;
     streamStartRef.current = Date.now();
-    // No real URL in mock mode — streamUrl stays null.
+    setConnectStatus('Mock mode — no real device');
     safeSetPhase('streaming');
   }
 
@@ -122,7 +179,7 @@ export function useStreamSession() {
     try {
       const ip = await new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(
-          () => reject(new Error('Timed out waiting for IP — ESP32 may not have joined WiFi')),
+          () => reject(new Error('Timed out waiting for IP — did the ESP32 join WiFi?')),
           30_000
         );
 
@@ -149,7 +206,9 @@ export function useStreamSession() {
       if (cancelledRef.current) return;
       safeSetPhase('connecting');
       streamStartRef.current = Date.now();
-      setStreamUrl(`http://${ip}/stream`);
+      const url = `http://${ip}/stream`;
+      setStreamUrl(url);
+      startXhrStream(url);
       safeSetPhase('streaming');
     } catch (err: any) {
       if (!cancelledRef.current) {
@@ -162,17 +221,17 @@ export function useStreamSession() {
   // ── Public API ───────────────────────────────────────────────────────────────
   const start = useCallback(async () => {
     cancelledRef.current = false;
+    stopXhr();
     setStreamUrl(null);
     setFrameCount(0);
     setErrorMessage('');
     setStreamError(null);
+    setConnectStatus(null);
     setBleMode(false);
     safeSetPhase('scanning');
 
     const ble = getBle();
-
     if (!ble) {
-      // Expo Go / no native module — use mock.
       await mockFlow();
       return;
     }
@@ -184,7 +243,6 @@ export function useStreamSession() {
       return;
     }
 
-    // Wait for Bluetooth radio.
     await new Promise<void>((resolve) => {
       const sub = ble.onStateChange((state: string) => {
         if (state === 'PoweredOn') { sub.remove(); resolve(); }
@@ -193,7 +251,6 @@ export function useStreamSession() {
 
     if (cancelledRef.current) return;
 
-    // Scan for ESP32-CAM.
     try {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -229,7 +286,6 @@ export function useStreamSession() {
 
     let stored: string | null = null;
     try { stored = await AsyncStorage.getItem(WIFI_KEY); } catch {}
-
     if (!stored) { safeSetPhase('wifi_setup'); return; }
 
     const { ssid, password } = JSON.parse(stored);
@@ -246,6 +302,7 @@ export function useStreamSession() {
   }, []);
 
   const stop = useCallback(() => {
+    stopXhr();
     deviceRef.current?.cancelConnection().catch(() => {});
     deviceRef.current = null;
     safeSetPhase('complete');
@@ -253,6 +310,7 @@ export function useStreamSession() {
 
   const reset = useCallback(() => {
     cancelledRef.current = true;
+    stopXhr();
     getBle()?.stopDeviceScan();
     deviceRef.current?.cancelConnection().catch(() => {});
     deviceRef.current = null;
@@ -261,15 +319,8 @@ export function useStreamSession() {
     setFrameCount(0);
     setErrorMessage('');
     setStreamError(null);
+    setConnectStatus(null);
     setBleMode(false);
-  }, []);
-
-  const handleFrame = useCallback(() => {
-    setFrameCount((n) => n + 1);
-  }, []);
-
-  const handleStreamError = useCallback((msg: string) => {
-    setStreamError(msg);
   }, []);
 
   const fps = frameCount > 0
@@ -278,8 +329,7 @@ export function useStreamSession() {
 
   return {
     phase, streamUrl, frameCount, fps,
-    errorMessage, streamError, bleMode,
+    errorMessage, streamError, connectStatus, bleMode,
     start, stop, reset, submitWifiCredentials,
-    handleFrame, handleStreamError,
   };
 }
