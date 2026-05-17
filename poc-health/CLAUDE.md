@@ -10,19 +10,23 @@ A React Native (Expo) app for a women's health Point-of-Care (POC) device that m
 ```
 poc-health/
 ├── app/
-│   ├── _layout.tsx          # Root layout (expo-router)
+│   ├── _layout.tsx          # Root layout — auth gate + AppState listener
+│   ├── lock.tsx             # Biometric / PIN lock screen
 │   └── (tabs)/
-│       ├── _layout.tsx      # Tab bar (Results / New Test / Profile)
+│       ├── _layout.tsx      # Tab bar (Results / New Test / History / Profile / Help)
 │       ├── index.tsx        # Results dashboard
 │       ├── new-test.tsx     # BLE connect + run test
-│       └── profile.tsx      # User info and stats
+│       ├── history.tsx      # Test history list + trend chart
+│       ├── profile.tsx      # User info and stats (persisted)
+│       └── help.tsx         # In-app FAQ and user guide
 ├── components/
 │   ├── ConnectionBadge.tsx  # Connected/disconnected indicator
 │   ├── EstrogenChart.tsx    # 30-day line chart (react-native-chart-kit)
 │   └── SymptomRow.tsx       # Symptom name + progress bar + severity label
 ├── constants/theme.ts       # Colors, spacing, radii, font sizes
-├── hooks/useBluetooth.ts    # BLE scan / connect / test lifecycle
-├── store/useAppStore.ts     # Simple in-memory reactive store + seed data
+├── hooks/useBluetooth.ts    # BLE scan / connect / test lifecycle (mock default)
+├── hooks/useBluetooth.ble.ts # Real BLE implementation (swap in for dev builds)
+├── store/useAppStore.ts     # Reactive store with AsyncStorage persistence
 └── types/index.ts           # Shared TypeScript types
 ```
 
@@ -47,21 +51,25 @@ npx expo run:ios          # or run:android
 
 The real implementation lives in `hooks/useBluetooth.ble.ts`.
 
-## BLE integration — what needs updating
-All BLE specifics live in `hooks/useBluetooth.ts`. When you have the real device spec, update:
+## BLE integration — finalised constants
 
-| Constant | Purpose |
-|---|---|
-| `POC_DEVICE_NAME_PREFIX` | Prefix of the BLE device name to scan for |
-| `POC_SERVICE_UUID` | GATT service UUID for test results |
-| `POC_CHARACTERISTIC_UUID` | GATT characteristic UUID to write commands / read results |
-| `parseTestResult()` | Decode the raw BLE packet into `{ estrogen, cycleDay }` |
-| `deriveSymptoms()` | Map estrogen level → symptom severity (replace with real algorithm) |
+All BLE specifics live in `hooks/useBluetooth.ble.ts`. The following constants are set to match the firmware in `CameraBLE/main/ble_server.c`:
 
-The battery level is currently hardcoded to 78. Read from the **Battery Service** (UUID `0x180F`, characteristic `0x2A19`) on the device.
+| Constant | Value | Purpose |
+|---|---|---|
+| `POC_DEVICE_NAME_PREFIX` | `'ESP32-CAM'` | BLE advertisement name prefix to scan for |
+| `POC_SERVICE_UUID` | `fb349b5f-...-000000000010` | GATT service |
+| `POC_CMD_CHARACTERISTIC_UUID` | `fb349b5f-...-000000000015` | Write: start command |
+| `POC_RESULT_CHARACTERISTIC_UUID` | `fb349b5f-...-000000000014` | Notify: test result |
+| `BATTERY_SERVICE_UUID` | `0000180f-...` | Standard BLE Battery Service |
+| `BATTERY_LEVEL_UUID` | `00002a19-...` | Battery level (0–100) |
+
+**Firmware TODO**: Add characteristics `0014` (notify) and `0015` (write) to `ble_server.c`. When a start command arrives, run the optical measurement, then notify `0014` with base64-encoded JSON: `{"estrogen":320.5,"cycleDay":14,"battery":82}`.
+
+Still needs replacing: `deriveSymptoms()` — currently a heuristic threshold model; replace with a validated clinical algorithm.
 
 ## State management
-`store/useAppStore.ts` is a minimal hand-rolled reactive store. If the app grows, replace it with **Zustand** — the interface shape (`results`, `device`, `connectionState`, `testStatus` + setters) should stay the same so consumers don't change.
+`store/useAppStore.ts` is a minimal hand-rolled reactive store backed by `@react-native-async-storage/async-storage`. All test results and profile data are persisted automatically — no extra calls needed in components. If the app grows, replace it with **Zustand** — the interface shape (`results`, `device`, `connectionState`, `testStatus`, `name`, `cycleLength` + setters) should stay the same so consumers don't change.
 
 ## Design tokens
 All colours, spacing, and typography live in `constants/theme.ts`. The brand palette is a warm salmon-red (`#C85450`) on a cream background (`#FFF7F5`), matching the Figma POC.
