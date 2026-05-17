@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Radius, FontSize } from '../constants/theme';
 
@@ -44,7 +45,7 @@ export default function LockScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.center}>
-        <Text style={styles.icon}>🔒</Text>
+        <Ionicons name="lock-closed" size={64} color={Colors.primary} />
         <Text style={styles.title}>POC Health</Text>
         <Text style={styles.subtitle}>Your health data is protected.</Text>
 
@@ -76,10 +77,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: Spacing.xl,
     gap: Spacing.md,
-  },
-  icon: {
-    fontSize: 64,
-    marginBottom: Spacing.sm,
   },
   title: {
     fontSize: FontSize.xl,

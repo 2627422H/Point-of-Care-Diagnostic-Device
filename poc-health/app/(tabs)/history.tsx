@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Dimensions,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { LineChart } from 'react-native-chart-kit';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
@@ -59,7 +60,7 @@ function ResultRow({
         <View style={styles.symptomsExpanded}>
           {result.symptoms.map((s) => (
             <View key={s.id} style={styles.symptomLine}>
-              <Text style={styles.symptomIcon}>{s.icon}</Text>
+              <Ionicons name={s.icon as React.ComponentProps<typeof Ionicons>['name']} size={16} color={SEVERITY_COLORS[s.severity] ?? Colors.text} style={styles.symptomIcon} />
               <Text style={styles.symptomName}>{s.name}</Text>
               <Text style={[styles.severityLabel, { color: SEVERITY_COLORS[s.severity] ?? Colors.text }]}>
                 {s.severity}
@@ -245,7 +246,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   symptomIcon: {
-    fontSize: 16,
     width: 22,
   },
   symptomName: {

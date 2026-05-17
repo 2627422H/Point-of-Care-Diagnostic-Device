@@ -1,19 +1,26 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize } from '../../constants/theme';
 
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const TAB_ICONS: Record<string, IoniconName> = {
+  index: 'stats-chart',
+  'new-test': 'add-circle',
+  history: 'time',
+  profile: 'person',
+  help: 'help-circle',
+};
+
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  const icons: Record<string, string> = {
-    index: '📊',
-    'new-test': '＋',
-    history: '📅',
-    profile: '👤',
-    help: '❓',
-  };
+  const iconName = TAB_ICONS[name] ?? 'ellipse';
   return (
-    <Text style={{ fontSize: name === 'new-test' ? 22 : 18, opacity: focused ? 1 : 0.6 }}>
-      {icons[name]}
-    </Text>
+    <Ionicons
+      name={iconName}
+      size={name === 'new-test' ? 26 : 22}
+      color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
+    />
   );
 }
 

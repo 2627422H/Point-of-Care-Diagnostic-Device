@@ -20,10 +20,10 @@ function mockTestResult(): TestResult {
     estrogenLevel: estrogen,
     cycleDay,
     symptoms: [
-      { id: 's1', name: 'Cramping', icon: '🔴', severity: isHigh ? 'Moderate' : 'Mild', value: isHigh ? 0.45 : 0.25 },
-      { id: 's2', name: 'Bloating', icon: '💧', severity: isHigh ? 'High' : isMid ? 'Moderate' : 'Mild', value: isHigh ? 0.75 : isMid ? 0.55 : 0.2 },
-      { id: 's3', name: 'Fatigue', icon: '⚡', severity: isMid ? 'Moderate' : 'Mild', value: isMid ? 0.5 : 0.2 },
-      { id: 's4', name: 'Mood changes', icon: '☀️', severity: isHigh ? 'Moderate' : 'Mild', value: isHigh ? 0.4 : 0.2 },
+      { id: 's1', name: 'Cramping', icon: 'pulse', severity: isHigh ? 'Moderate' : 'Mild', value: isHigh ? 0.45 : 0.25 },
+      { id: 's2', name: 'Bloating', icon: 'water', severity: isHigh ? 'High' : isMid ? 'Moderate' : 'Mild', value: isHigh ? 0.75 : isMid ? 0.55 : 0.2 },
+      { id: 's3', name: 'Fatigue', icon: 'flash', severity: isMid ? 'Moderate' : 'Mild', value: isMid ? 0.5 : 0.2 },
+      { id: 's4', name: 'Mood changes', icon: 'sunny', severity: isHigh ? 'Moderate' : 'Mild', value: isHigh ? 0.4 : 0.2 },
     ],
   };
 }

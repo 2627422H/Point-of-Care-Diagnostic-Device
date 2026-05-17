@@ -9,10 +9,10 @@ const SEED_HISTORY: TestResult[] = [
     estrogenLevel: 400,
     cycleDay: 17,
     symptoms: [
-      { id: 's1', name: 'Cramping', icon: '🔴', severity: 'Mild', value: 0.25 },
-      { id: 's2', name: 'Bloating', icon: '💧', severity: 'Moderate', value: 0.55 },
-      { id: 's3', name: 'Fatigue', icon: '⚡', severity: 'Moderate', value: 0.5 },
-      { id: 's4', name: 'Mood changes', icon: '☀️', severity: 'Mild', value: 0.2 },
+      { id: 's1', name: 'Cramping', icon: 'pulse', severity: 'Mild', value: 0.25 },
+      { id: 's2', name: 'Bloating', icon: 'water', severity: 'Moderate', value: 0.55 },
+      { id: 's3', name: 'Fatigue', icon: 'flash', severity: 'Moderate', value: 0.5 },
+      { id: 's4', name: 'Mood changes', icon: 'sunny', severity: 'Mild', value: 0.2 },
     ],
   },
 ];
