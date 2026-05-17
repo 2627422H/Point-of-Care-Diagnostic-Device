@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
@@ -49,10 +50,14 @@ export default function NewTestScreen() {
     streamError,
     connectStatus,
     bleMode,
+    bytesReceived,
+    useWebViewMode,
     start,
     stop,
     reset,
     submitWifiCredentials,
+    enableWebView,
+    handleWebViewFrame,
   } = useStreamSession();
 
   const [ssid, setSsid] = useState('');
@@ -209,6 +214,15 @@ export default function NewTestScreen() {
                 <Text style={styles.debugValue}>{connectStatus ?? 'connecting…'}</Text>
               </View>
               <View style={styles.debugRow}>
+                <Ionicons name="cloud-download-outline" size={16} color={Colors.primary} />
+                <Text style={styles.debugLabel}>Bytes Rx</Text>
+                <Text style={styles.debugValue}>
+                  {bytesReceived > 0
+                    ? `${(bytesReceived / 1024).toFixed(1)} KB`
+                    : '0 — no chunks yet'}
+                </Text>
+              </View>
+              <View style={styles.debugRow}>
                 <Ionicons name="film-outline" size={16} color={Colors.primary} />
                 <Text style={styles.debugLabel}>Frames</Text>
                 <Text style={styles.debugValue}>{frameCount}</Text>
@@ -228,6 +242,25 @@ export default function NewTestScreen() {
                 </View>
               )}
             </View>
+          )}
+
+          {/* WebView fallback toggle — shown when streaming but frames stay at 0 */}
+          {isStreaming && streamUrl && !useWebViewMode && (
+            <TouchableOpacity style={styles.webViewToggle} onPress={enableWebView} activeOpacity={0.8}>
+              <Ionicons name="swap-horizontal-outline" size={16} color={Colors.primary} />
+              <Text style={styles.webViewToggleText}>
+                Frames stuck at 0? Tap to switch to WebView mode
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Hidden WebView frame counter — active only in WebView mode */}
+          {isStreaming && streamUrl && useWebViewMode && (
+            <MjpegAnalyzer
+              streamUrl={streamUrl}
+              onFrame={handleWebViewFrame}
+              onError={() => {}}
+            />
           )}
 
           {/* Error message */}
@@ -432,6 +465,22 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.primaryDark,
     lineHeight: 20,
+  },
+  webViewToggle: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  webViewToggleText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    fontWeight: '600',
   },
   graphPlaceholder: {
     backgroundColor: Colors.cardBackground,

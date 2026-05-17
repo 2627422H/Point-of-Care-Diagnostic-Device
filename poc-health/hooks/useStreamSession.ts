@@ -78,12 +78,16 @@ export function useStreamSession() {
   const [streamError, setStreamError]   = useState<string | null>(null);
   const [connectStatus, setConnectStatus] = useState<string | null>(null);
   const [bleMode, setBleMode]           = useState(false);
+  const [bytesReceived, setBytesReceived] = useState(0);
+  const [useWebViewMode, setUseWebViewMode] = useState(false);
 
-  const streamStartRef = useRef<number>(0);
-  const cancelledRef   = useRef(false);
-  const deviceRef      = useRef<any>(null);
-  const abortRef       = useRef<AbortController | null>(null);
-  const frameCountRef  = useRef(0);
+  const streamStartRef  = useRef<number>(0);
+  const cancelledRef    = useRef(false);
+  const deviceRef       = useRef<any>(null);
+  const abortRef        = useRef<AbortController | null>(null);
+  const frameCountRef   = useRef(0);
+  const bytesRef        = useRef(0);
+  const useWebViewRef   = useRef(false);
 
   function safeSetPhase(p: StreamPhase) {
     if (!cancelledRef.current) setPhase(p);
@@ -95,8 +99,6 @@ export function useStreamSession() {
   }
 
   // ── Fetch stream reader ──────────────────────────────────────────────────────
-  // Uses fetch() + response.body.getReader() for binary-safe MJPEG parsing.
-  // Mirrors the Python script's retry logic: up to 10 attempts, 2s apart.
   async function startFetchStream(url: string, attempt = 1) {
     if (cancelledRef.current) return;
     const MAX_ATTEMPTS = 10;
@@ -109,25 +111,44 @@ export function useStreamSession() {
     try {
       const res = await fetch(url, { signal: controller.signal });
       setConnectStatus(`HTTP ${res.status}`);
+      console.log('[stream] fetch ok status=', res.status,
+        'body=', !!res.body,
+        'content-type=', res.headers.get('content-type'));
 
       if (!res.body) {
         setStreamError('Streaming not supported on this platform');
         return;
       }
 
+      // If WebView mode is active, the hidden MjpegAnalyzer WebView handles
+      // frame counting — native fetch just confirmed connectivity.
+      if (useWebViewRef.current) {
+        console.log('[stream] WebView mode active — handing off to MjpegAnalyzer');
+        return;
+      }
+
       const reader = res.body.getReader();
-      // Keep only a small tail buffer to detect boundaries that span chunks.
       let tail = new Uint8Array(0);
 
       while (!cancelledRef.current) {
+        console.log('[stream] calling reader.read()');
         const { value, done } = await reader.read();
+        console.log('[stream] read returned done=', done, 'bytes=', value?.length ?? 0);
         if (done) break;
         if (!value?.length) continue;
+
+        // Track total bytes received for UI diagnostic.
+        bytesRef.current += value.length;
+        setBytesReceived(bytesRef.current);
 
         // Combine leftover tail with new chunk.
         const chunk = new Uint8Array(tail.length + value.length);
         chunk.set(tail);
         chunk.set(value, tail.length);
+
+        const preview = Array.from(chunk.slice(0, 20))
+          .map(b => b.toString(16).padStart(2, '0')).join(' ');
+        console.log('[stream] chunk bytes=', chunk.length, 'first20=', preview);
 
         // Count "--frame" boundaries.
         let i = 0;
@@ -150,6 +171,7 @@ export function useStreamSession() {
         tail = chunk.slice(Math.max(0, chunk.length - (FRAME_BOUNDARY.length - 1)));
       }
     } catch (err: any) {
+      console.log('[stream] error name=', err?.name, 'msg=', err?.message);
       if (cancelledRef.current || err?.name === 'AbortError') return;
       if (attempt < MAX_ATTEMPTS) {
         const retryDelay = attempt === 1 ? 500 : 2000;
@@ -237,13 +259,28 @@ export function useStreamSession() {
     }
   }
 
+  // ── WebView mode ─────────────────────────────────────────────────────────────
+  const enableWebView = useCallback(() => {
+    useWebViewRef.current = true;
+    setUseWebViewMode(true);
+  }, []);
+
+  const handleWebViewFrame = useCallback(() => {
+    frameCountRef.current += 1;
+    setFrameCount(frameCountRef.current);
+  }, []);
+
   // ── Public API ───────────────────────────────────────────────────────────────
   const start = useCallback(async () => {
     cancelledRef.current = false;
+    useWebViewRef.current = false;
     stopStream();
     setStreamUrl(null);
     setFrameCount(0);
     frameCountRef.current = 0;
+    setBytesReceived(0);
+    bytesRef.current = 0;
+    setUseWebViewMode(false);
     setErrorMessage('');
     setStreamError(null);
     setConnectStatus(null);
@@ -330,6 +367,7 @@ export function useStreamSession() {
 
   const reset = useCallback(() => {
     cancelledRef.current = true;
+    useWebViewRef.current = false;
     stopStream();
     getBle()?.stopDeviceScan();
     deviceRef.current?.cancelConnection().catch(() => {});
@@ -338,6 +376,9 @@ export function useStreamSession() {
     setStreamUrl(null);
     setFrameCount(0);
     frameCountRef.current = 0;
+    setBytesReceived(0);
+    bytesRef.current = 0;
+    setUseWebViewMode(false);
     setErrorMessage('');
     setStreamError(null);
     setConnectStatus(null);
@@ -351,6 +392,8 @@ export function useStreamSession() {
   return {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
+    bytesReceived, useWebViewMode,
     start, stop, reset, submitWifiCredentials,
+    enableWebView, handleWebViewFrame,
   };
 }

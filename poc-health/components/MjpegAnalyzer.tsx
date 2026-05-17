@@ -24,14 +24,18 @@ async function startStream(url) {
       const next = new Uint8Array(buf.length + value.length);
       next.set(buf); next.set(value, buf.length);
       buf = next;
-      let s = -1, e = -1;
-      for (let i = 0; i < buf.length - 1; i++) {
-        if (buf[i] === 0xFF && buf[i+1] === 0xD8) { s = i; break; }
-      }
-      for (let i = buf.length - 1; i > 0; i--) {
-        if (buf[i-1] === 0xFF && buf[i] === 0xD9) { e = i; break; }
-      }
-      if (s !== -1 && e !== -1 && e > s) {
+      // Extract every complete JPEG (FF D8 ... FF D9) from buf.
+      while (true) {
+        let s = -1;
+        for (let i = 0; i < buf.length - 1; i++) {
+          if (buf[i] === 0xFF && buf[i+1] === 0xD8) { s = i; break; }
+        }
+        if (s === -1) { buf = new Uint8Array(0); break; }
+        let e = -1;
+        for (let i = s + 2; i < buf.length - 1; i++) {
+          if (buf[i] === 0xFF && buf[i+1] === 0xD9) { e = i + 1; break; }
+        }
+        if (e === -1) { buf = buf.slice(s); break; }
         window.ReactNativeWebView.postMessage('frame');
         buf = buf.slice(e + 1);
       }
