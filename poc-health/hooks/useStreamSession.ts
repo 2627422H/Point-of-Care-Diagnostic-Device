@@ -91,17 +91,24 @@ export function useStreamSession() {
   }
 
   // ── XHR stream reader (runs in RN, no WebView needed) ───────────────────────
-  function startXhrStream(url: string) {
+  // Mirrors the Python script's retry logic: up to 10 attempts, 2s apart.
+  function startXhrStream(url: string, attempt = 1) {
+    if (cancelledRef.current) return;
+
+    const MAX_ATTEMPTS = 10;
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
-    frameCountRef.current = 0;
-    xhrOffsetRef.current = 0;
+    if (attempt === 1) {
+      frameCountRef.current = 0;
+      xhrOffsetRef.current = 0;
+    }
+
+    setConnectStatus(attempt === 1 ? 'Connecting…' : `Retry ${attempt}/${MAX_ATTEMPTS}…`);
 
     xhr.open('GET', url, true);
 
     xhr.onreadystatechange = () => {
       if (xhr.readyState === 2) {
-        // Headers received — connection succeeded.
         setConnectStatus(`HTTP ${xhr.status}`);
       }
     };
@@ -111,7 +118,6 @@ export function useStreamSession() {
       const chunk = text.slice(xhrOffsetRef.current);
       xhrOffsetRef.current = text.length;
 
-      // Count each MJPEG boundary as one complete frame.
       let pos = 0;
       while (pos < chunk.length) {
         const idx = chunk.indexOf(MJPEG_BOUNDARY, pos);
@@ -123,13 +129,23 @@ export function useStreamSession() {
     };
 
     xhr.onerror = () => {
-      setStreamError(`Connection failed (HTTP ${xhr.status || 'no response'})`);
-      setConnectStatus('Failed');
+      if (cancelledRef.current) return;
+      if (attempt < MAX_ATTEMPTS) {
+        setTimeout(() => startXhrStream(url, attempt + 1), 2000);
+      } else {
+        setStreamError('Could not connect after 10 attempts — is the ESP32 HTTP server running?');
+        setConnectStatus('Failed');
+      }
     };
 
     xhr.ontimeout = () => {
-      setStreamError('Connection timed out');
-      setConnectStatus('Timeout');
+      if (cancelledRef.current) return;
+      if (attempt < MAX_ATTEMPTS) {
+        setTimeout(() => startXhrStream(url, attempt + 1), 2000);
+      } else {
+        setStreamError('Connection timed out after 10 attempts');
+        setConnectStatus('Timeout');
+      }
     };
 
     xhr.send();
