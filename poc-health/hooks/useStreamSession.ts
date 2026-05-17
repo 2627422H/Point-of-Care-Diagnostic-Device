@@ -35,10 +35,10 @@ function getBle(): import('react-native-ble-plx').BleManager | null {
 }
 
 function strToBase64(str: string): string {
-  return Buffer.from(str, 'utf8').toString('base64');
+  return btoa(unescape(encodeURIComponent(str)));
 }
 function base64ToStr(b64: string): string {
-  return Buffer.from(b64, 'base64').toString('utf8');
+  return decodeURIComponent(escape(atob(b64)));
 }
 function delay(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
