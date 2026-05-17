@@ -20,8 +20,8 @@ const PASS_UUID    = 'fb349b5f-8000-0080-0010-000000000012';
 const IP_UUID      = 'fb349b5f-8000-0080-0010-000000000013';
 const WIFI_KEY     = 'poc_wifi_credentials';
 
-// MJPEG frame boundary written by wifi_stream.c
-const MJPEG_BOUNDARY = '--frame';
+// "--frame" as bytes (ASCII) — matches wifi_stream.c MJPEG_BOUNDARY
+const FRAME_BOUNDARY = [0x2D, 0x2D, 0x66, 0x72, 0x61, 0x6D, 0x65] as const;
 
 let _ble: import('react-native-ble-plx').BleManager | null = null;
 function getBle(): import('react-native-ble-plx').BleManager | null {
@@ -71,90 +71,93 @@ async function requestAndroidPermissions(): Promise<boolean> {
 }
 
 export function useStreamSession() {
-  const [phase, setPhase]             = useState<StreamPhase>('idle');
-  const [streamUrl, setStreamUrl]     = useState<string | null>(null);
-  const [frameCount, setFrameCount]   = useState(0);
+  const [phase, setPhase]               = useState<StreamPhase>('idle');
+  const [streamUrl, setStreamUrl]       = useState<string | null>(null);
+  const [frameCount, setFrameCount]     = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
-  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamError, setStreamError]   = useState<string | null>(null);
   const [connectStatus, setConnectStatus] = useState<string | null>(null);
-  const [bleMode, setBleMode]         = useState(false);
+  const [bleMode, setBleMode]           = useState(false);
 
   const streamStartRef = useRef<number>(0);
   const cancelledRef   = useRef(false);
   const deviceRef      = useRef<any>(null);
-  const xhrRef         = useRef<XMLHttpRequest | null>(null);
+  const abortRef       = useRef<AbortController | null>(null);
   const frameCountRef  = useRef(0);
-  const xhrOffsetRef   = useRef(0);
 
   function safeSetPhase(p: StreamPhase) {
     if (!cancelledRef.current) setPhase(p);
   }
 
-  // ── XHR stream reader (runs in RN, no WebView needed) ───────────────────────
-  // Mirrors the Python script's retry logic: up to 10 attempts, 2s apart.
-  function startXhrStream(url: string, attempt = 1) {
-    if (cancelledRef.current) return;
+  function stopStream() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }
 
+  // ── Fetch stream reader ──────────────────────────────────────────────────────
+  // Uses fetch() + response.body.getReader() for binary-safe MJPEG parsing.
+  // Mirrors the Python script's retry logic: up to 10 attempts, 2s apart.
+  async function startFetchStream(url: string, attempt = 1) {
+    if (cancelledRef.current) return;
     const MAX_ATTEMPTS = 10;
-    const xhr = new XMLHttpRequest();
-    xhrRef.current = xhr;
-    if (attempt === 1) {
-      frameCountRef.current = 0;
-      xhrOffsetRef.current = 0;
-    }
 
     setConnectStatus(attempt === 1 ? 'Connecting…' : `Retry ${attempt}/${MAX_ATTEMPTS}…`);
 
-    xhr.open('GET', url, true);
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    xhr.onreadystatechange = () => {
-      if (xhr.readyState === 2) {
-        setConnectStatus(`HTTP ${xhr.status}`);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      setConnectStatus(`HTTP ${res.status}`);
+
+      if (!res.body) {
+        setStreamError('Streaming not supported on this platform');
+        return;
       }
-    };
 
-    xhr.onprogress = () => {
-      const text = xhr.responseText;
-      const chunk = text.slice(xhrOffsetRef.current);
-      xhrOffsetRef.current = text.length;
+      const reader = res.body.getReader();
+      // Keep only a small tail buffer to detect boundaries that span chunks.
+      let tail = new Uint8Array(0);
 
-      let pos = 0;
-      while (pos < chunk.length) {
-        const idx = chunk.indexOf(MJPEG_BOUNDARY, pos);
-        if (idx === -1) break;
-        frameCountRef.current += 1;
-        setFrameCount(frameCountRef.current);
-        pos = idx + MJPEG_BOUNDARY.length;
+      while (!cancelledRef.current) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value?.length) continue;
+
+        // Combine leftover tail with new chunk.
+        const chunk = new Uint8Array(tail.length + value.length);
+        chunk.set(tail);
+        chunk.set(value, tail.length);
+
+        // Count "--frame" boundaries.
+        let i = 0;
+        while (i <= chunk.length - FRAME_BOUNDARY.length) {
+          let match = true;
+          for (let j = 0; j < FRAME_BOUNDARY.length; j++) {
+            if (chunk[i + j] !== FRAME_BOUNDARY[j]) { match = false; break; }
+          }
+          if (match) {
+            frameCountRef.current += 1;
+            setFrameCount(frameCountRef.current);
+            i += FRAME_BOUNDARY.length;
+          } else {
+            i++;
+          }
+        }
+
+        // Keep only the last (boundary.length - 1) bytes as tail in case
+        // the boundary is split across two chunks.
+        tail = chunk.slice(Math.max(0, chunk.length - (FRAME_BOUNDARY.length - 1)));
       }
-    };
-
-    xhr.onerror = () => {
-      if (cancelledRef.current) return;
+    } catch (err: any) {
+      if (cancelledRef.current || err?.name === 'AbortError') return;
       if (attempt < MAX_ATTEMPTS) {
-        setTimeout(() => startXhrStream(url, attempt + 1), 2000);
+        const retryDelay = attempt === 1 ? 500 : 2000;
+        setTimeout(() => startFetchStream(url, attempt + 1), retryDelay);
       } else {
-        setStreamError('Could not connect after 10 attempts — is the ESP32 HTTP server running?');
+        setStreamError(`Could not connect after ${MAX_ATTEMPTS} attempts: ${err?.message ?? 'unknown error'}`);
         setConnectStatus('Failed');
       }
-    };
-
-    xhr.ontimeout = () => {
-      if (cancelledRef.current) return;
-      if (attempt < MAX_ATTEMPTS) {
-        setTimeout(() => startXhrStream(url, attempt + 1), 2000);
-      } else {
-        setStreamError('Connection timed out after 10 attempts');
-        setConnectStatus('Timeout');
-      }
-    };
-
-    xhr.send();
-  }
-
-  function stopXhr() {
-    if (xhrRef.current) {
-      xhrRef.current.abort();
-      xhrRef.current = null;
     }
   }
 
@@ -224,7 +227,7 @@ export function useStreamSession() {
       streamStartRef.current = Date.now();
       const url = `http://${ip}/stream`;
       setStreamUrl(url);
-      startXhrStream(url);
+      startFetchStream(url);
       safeSetPhase('streaming');
     } catch (err: any) {
       if (!cancelledRef.current) {
@@ -237,9 +240,10 @@ export function useStreamSession() {
   // ── Public API ───────────────────────────────────────────────────────────────
   const start = useCallback(async () => {
     cancelledRef.current = false;
-    stopXhr();
+    stopStream();
     setStreamUrl(null);
     setFrameCount(0);
+    frameCountRef.current = 0;
     setErrorMessage('');
     setStreamError(null);
     setConnectStatus(null);
@@ -318,7 +322,7 @@ export function useStreamSession() {
   }, []);
 
   const stop = useCallback(() => {
-    stopXhr();
+    stopStream();
     deviceRef.current?.cancelConnection().catch(() => {});
     deviceRef.current = null;
     safeSetPhase('complete');
@@ -326,13 +330,14 @@ export function useStreamSession() {
 
   const reset = useCallback(() => {
     cancelledRef.current = true;
-    stopXhr();
+    stopStream();
     getBle()?.stopDeviceScan();
     deviceRef.current?.cancelConnection().catch(() => {});
     deviceRef.current = null;
     setPhase('idle');
     setStreamUrl(null);
     setFrameCount(0);
+    frameCountRef.current = 0;
     setErrorMessage('');
     setStreamError(null);
     setConnectStatus(null);
