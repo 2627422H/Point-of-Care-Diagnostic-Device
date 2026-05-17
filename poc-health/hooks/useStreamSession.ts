@@ -80,6 +80,7 @@ export function useStreamSession() {
   const [bleMode, setBleMode]           = useState(false);
   const [bytesReceived, setBytesReceived] = useState(0);
   const [useWebViewMode, setUseWebViewMode] = useState(false);
+  const [webViewStatus, setWebViewStatus] = useState<string | null>(null);
 
   const streamStartRef  = useRef<number>(0);
   const cancelledRef    = useRef(false);
@@ -261,13 +262,19 @@ export function useStreamSession() {
 
   // ── WebView mode ─────────────────────────────────────────────────────────────
   const enableWebView = useCallback(() => {
+    stopStream();
     useWebViewRef.current = true;
     setUseWebViewMode(true);
+    setWebViewStatus('WebView mounting…');
   }, []);
 
   const handleWebViewFrame = useCallback(() => {
     frameCountRef.current += 1;
     setFrameCount(frameCountRef.current);
+  }, []);
+
+  const handleWebViewStatus = useCallback((msg: string) => {
+    setWebViewStatus(msg);
   }, []);
 
   // ── Public API ───────────────────────────────────────────────────────────────
@@ -281,6 +288,7 @@ export function useStreamSession() {
     setBytesReceived(0);
     bytesRef.current = 0;
     setUseWebViewMode(false);
+    setWebViewStatus(null);
     setErrorMessage('');
     setStreamError(null);
     setConnectStatus(null);
@@ -379,6 +387,7 @@ export function useStreamSession() {
     setBytesReceived(0);
     bytesRef.current = 0;
     setUseWebViewMode(false);
+    setWebViewStatus(null);
     setErrorMessage('');
     setStreamError(null);
     setConnectStatus(null);
@@ -392,8 +401,8 @@ export function useStreamSession() {
   return {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
-    bytesReceived, useWebViewMode,
+    bytesReceived, useWebViewMode, webViewStatus,
     start, stop, reset, submitWifiCredentials,
-    enableWebView, handleWebViewFrame,
+    enableWebView, handleWebViewFrame, handleWebViewStatus,
   };
 }

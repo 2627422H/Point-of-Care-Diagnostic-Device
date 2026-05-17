@@ -52,12 +52,14 @@ export default function NewTestScreen() {
     bleMode,
     bytesReceived,
     useWebViewMode,
+    webViewStatus,
     start,
     stop,
     reset,
     submitWifiCredentials,
     enableWebView,
     handleWebViewFrame,
+    handleWebViewStatus,
   } = useStreamSession();
 
   const [ssid, setSsid] = useState('');
@@ -232,6 +234,13 @@ export default function NewTestScreen() {
                 <Text style={styles.debugLabel}>FPS</Text>
                 <Text style={styles.debugValue}>{fps}</Text>
               </View>
+              {useWebViewMode && webViewStatus && (
+                <View style={styles.debugRow}>
+                  <Ionicons name="globe-outline" size={16} color={Colors.primary} />
+                  <Text style={styles.debugLabel}>WebView</Text>
+                  <Text style={styles.debugValue} numberOfLines={2}>{webViewStatus}</Text>
+                </View>
+              )}
               {streamError && (
                 <View style={styles.debugRow}>
                   <Ionicons name="alert-circle-outline" size={16} color={Colors.primaryDark} />
@@ -259,7 +268,8 @@ export default function NewTestScreen() {
             <MjpegAnalyzer
               streamUrl={streamUrl}
               onFrame={handleWebViewFrame}
-              onError={() => {}}
+              onError={(msg) => handleWebViewStatus('error: ' + msg)}
+              onStatus={handleWebViewStatus}
             />
           )}
 
