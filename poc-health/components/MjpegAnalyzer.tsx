@@ -77,7 +77,6 @@ export default function MjpegAnalyzer({ streamUrl, onFrame, onError, onStatus }:
 
   return (
     <WebView
-      ref={webRef}
       source={{ html: makeHtml(streamUrl) }}
       style={styles.hidden}
       onMessage={handleMessage}
