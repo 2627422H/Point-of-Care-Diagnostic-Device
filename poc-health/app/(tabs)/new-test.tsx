@@ -11,32 +11,33 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
+import MjpegViewer from '../../components/MjpegViewer';
+import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
 
 const PHASE_LABEL: Record<StreamPhase, string> = {
-  idle:         'READY',
-  scanning:     'SCANNING…',
-  ble_connected:'DEVICE FOUND',
-  wifi_setup:   'WIFI NEEDED',
-  provisioning: 'CONNECTING WIFI…',
-  connecting:   'STARTING CAMERA…',
-  streaming:    'STREAMING',
-  complete:     'COMPLETE',
-  error:        'ERROR',
+  idle:          'READY',
+  scanning:      'SCANNING…',
+  ble_connected: 'DEVICE FOUND',
+  wifi_setup:    'WIFI NEEDED',
+  provisioning:  'CONNECTING WIFI…',
+  connecting:    'STARTING CAMERA…',
+  streaming:     'STREAMING',
+  complete:      'COMPLETE',
+  error:         'ERROR',
 };
 
 const PHASE_DESCRIPTION: Partial<Record<StreamPhase, string>> = {
-  scanning:     'Scanning for POC device via Bluetooth…',
-  ble_connected:'Device found. Checking WiFi credentials…',
-  provisioning: 'Sending WiFi credentials to device…',
-  connecting:   'Device is connecting to the camera stream…',
-  streaming:    'Receiving live camera data.',
-  complete:     'Session complete.',
+  scanning:      'Scanning for POC device via Bluetooth…',
+  ble_connected: 'Device found. Checking WiFi credentials…',
+  provisioning:  'Sending WiFi credentials to device…',
+  connecting:    'Device is connecting to the camera stream…',
+  streaming:     'Receiving live camera data.',
+  complete:      'Session complete.',
 };
 
 export default function NewTestScreen() {
@@ -62,9 +63,18 @@ export default function NewTestScreen() {
     handleWebViewStatus,
   } = useStreamSession();
 
-  const [ssid, setSsid] = useState('');
-  const [password, setPassword] = useState('');
+  const [ssid,         setSsid]         = useState('');
+  const [password,     setPassword]     = useState('');
   const [showPassword, setShowPassword] = useState(false);
+
+  /* Manual IP fallback — lets user type the IP directly if BLE provisioning
+   * delivers the wrong address or the stream URL isn't being set. */
+  const [showManualIp,  setShowManualIp]  = useState(false);
+  const [manualIp,      setManualIp]      = useState('');
+  const [activeStreamUrl, setActiveStreamUrl] = useState<string | null>(null);
+
+  /* The URL we actually show — prefer manually entered over hook-provided. */
+  const displayUrl = activeStreamUrl ?? streamUrl;
 
   const isIdle      = phase === 'idle';
   const isStreaming  = phase === 'streaming';
@@ -75,6 +85,8 @@ export default function NewTestScreen() {
 
   function handleMainButton() {
     if (isIdle || isComplete || isError) {
+      setActiveStreamUrl(null);
+      setShowManualIp(false);
       reset();
       start();
     } else if (isStreaming) {
@@ -86,6 +98,14 @@ export default function NewTestScreen() {
     if (ssid.trim() && password.trim()) {
       submitWifiCredentials(ssid.trim(), password.trim());
     }
+  }
+
+  function handleManualIpSubmit() {
+    const ip = manualIp.trim();
+    if (!ip) return;
+    const url = ip.startsWith('http') ? ip : `http://${ip}/stream`;
+    setActiveStreamUrl(url);
+    setShowManualIp(false);
   }
 
   return (
@@ -105,7 +125,7 @@ export default function NewTestScreen() {
             <ConnectionBadge state={connectionState} batteryPercent={device?.batteryPercent} />
           </View>
 
-          {/* Status row */}
+          {/* Status + action button */}
           <View style={styles.statusRow}>
             <View style={styles.statusBox}>
               <Text style={styles.statusLabel}>Status</Text>
@@ -142,13 +162,108 @@ export default function NewTestScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* WiFi setup form — shown once on first use */}
+          {/* ── LIVE STREAM VIEWER ── */}
+          {(isStreaming || displayUrl) && displayUrl ? (
+            <View style={styles.streamCard}>
+              <Text style={styles.streamCardTitle}>LIVE STREAM</Text>
+              <MjpegViewer
+                streamUrl={displayUrl}
+                onFrame={handleWebViewFrame}
+                onError={(msg) => handleWebViewStatus('error: ' + msg)}
+                onStatus={handleWebViewStatus}
+              />
+              <View style={styles.streamStats}>
+                <Text style={styles.streamStat}>
+                  <Text style={styles.streamStatLabel}>Frames: </Text>
+                  {frameCount}
+                </Text>
+                <Text style={styles.streamStat}>
+                  <Text style={styles.streamStatLabel}>FPS: </Text>
+                  {fps}
+                </Text>
+                <Text style={styles.streamStat} numberOfLines={1}>
+                  <Text style={styles.streamStatLabel}>URL: </Text>
+                  {displayUrl}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Manual IP entry — shown while streaming if stream URL not set,
+              or toggled by the user if the stream appears blank */}
+          {isStreaming && !displayUrl && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Enter Stream IP</Text>
+              <Text style={styles.cardDesc}>
+                If the stream URL wasn't received automatically, enter the IP
+                shown on the ESP32 serial monitor (e.g. 192.168.1.81).
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={manualIp}
+                onChangeText={setManualIp}
+                placeholder="192.168.1.81"
+                placeholderTextColor={Colors.textMuted}
+                keyboardType="numbers-and-punctuation"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={[styles.submitButton, !manualIp.trim() && styles.submitButtonDisabled]}
+                onPress={handleManualIpSubmit}
+                disabled={!manualIp.trim()}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.submitLabel}>CONNECT TO STREAM</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Change IP button — shown when streaming with an active URL */}
+          {isStreaming && displayUrl && (
+            <TouchableOpacity
+              style={styles.manualIpToggle}
+              onPress={() => setShowManualIp((v) => !v)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="pencil-outline" size={16} color={Colors.primary} />
+              <Text style={styles.manualIpToggleText}>
+                {showManualIp ? 'Cancel' : 'Stream looks blank? Change IP'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Manual IP override input */}
+          {isStreaming && displayUrl && showManualIp && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Override Stream IP</Text>
+              <TextInput
+                style={styles.input}
+                value={manualIp}
+                onChangeText={setManualIp}
+                placeholder="192.168.1.81"
+                placeholderTextColor={Colors.textMuted}
+                keyboardType="numbers-and-punctuation"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={[styles.submitButton, !manualIp.trim() && styles.submitButtonDisabled]}
+                onPress={handleManualIpSubmit}
+                disabled={!manualIp.trim()}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.submitLabel}>USE THIS IP</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* WiFi setup form */}
           {isWifiSetup && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>WiFi Setup</Text>
               <Text style={styles.cardDesc}>
-                Enter your WiFi credentials once. They will be stored on the device and used
-                automatically from now on.
+                Enter your WiFi credentials once. They will be stored and used automatically.
               </Text>
 
               <Text style={styles.fieldLabel}>Network name (SSID)</Text>
@@ -187,7 +302,10 @@ export default function NewTestScreen() {
               </View>
 
               <TouchableOpacity
-                style={[styles.submitButton, (!ssid.trim() || !password.trim()) && styles.submitButtonDisabled]}
+                style={[
+                  styles.submitButton,
+                  (!ssid.trim() || !password.trim()) && styles.submitButtonDisabled,
+                ]}
                 onPress={handleWifiSubmit}
                 disabled={!ssid.trim() || !password.trim()}
                 activeOpacity={0.8}
@@ -197,91 +315,46 @@ export default function NewTestScreen() {
             </View>
           )}
 
-          {/* Stream debug panel */}
-          {isStreaming && (
-            <View style={styles.debugCard}>
-              <View style={styles.debugRow}>
-                <Ionicons name="bluetooth" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>Mode</Text>
-                <Text style={styles.debugValue}>{bleMode ? 'BLE (real)' : 'Mock'}</Text>
-              </View>
-              <View style={styles.debugRow}>
-                <Ionicons name="wifi" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>Stream URL</Text>
-                <Text style={styles.debugValue} numberOfLines={1}>{streamUrl ?? 'not received'}</Text>
-              </View>
-              <View style={styles.debugRow}>
-                <Ionicons name="checkmark-circle-outline" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>HTTP</Text>
-                <Text style={styles.debugValue}>{connectStatus ?? 'connecting…'}</Text>
-              </View>
-              <View style={styles.debugRow}>
-                <Ionicons name="cloud-download-outline" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>Bytes Rx</Text>
-                <Text style={styles.debugValue}>
-                  {bytesReceived > 0
-                    ? `${(bytesReceived / 1024).toFixed(1)} KB`
-                    : '0 — no chunks yet'}
-                </Text>
-              </View>
-              <View style={styles.debugRow}>
-                <Ionicons name="film-outline" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>Frames</Text>
-                <Text style={styles.debugValue}>{frameCount}</Text>
-              </View>
-              <View style={styles.debugRow}>
-                <Ionicons name="speedometer-outline" size={16} color={Colors.primary} />
-                <Text style={styles.debugLabel}>FPS</Text>
-                <Text style={styles.debugValue}>{fps}</Text>
-              </View>
-              {useWebViewMode && webViewStatus && (
-                <View style={styles.debugRow}>
-                  <Ionicons name="globe-outline" size={16} color={Colors.primary} />
-                  <Text style={styles.debugLabel}>WebView</Text>
-                  <Text style={styles.debugValue} numberOfLines={2}>{webViewStatus}</Text>
-                </View>
-              )}
-              {streamError && (
-                <View style={styles.debugRow}>
-                  <Ionicons name="alert-circle-outline" size={16} color={Colors.primaryDark} />
-                  <Text style={[styles.debugLabel, { color: Colors.primaryDark }]}>Error</Text>
-                  <Text style={[styles.debugValue, { color: Colors.primaryDark }]} numberOfLines={2}>
-                    {streamError}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* WebView fallback toggle — shown when streaming but frames stay at 0 */}
-          {isStreaming && streamUrl && !useWebViewMode && (
-            <TouchableOpacity style={styles.webViewToggle} onPress={enableWebView} activeOpacity={0.8}>
-              <Ionicons name="swap-horizontal-outline" size={16} color={Colors.primary} />
-              <Text style={styles.webViewToggleText}>
-                Frames stuck at 0? Tap to switch to WebView mode
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {/* Hidden WebView frame counter — active only in WebView mode */}
-          {isStreaming && streamUrl && useWebViewMode && (
+          {/* Debug panel — hidden WebView analyzer still runs for frame counting
+              when MjpegViewer is visible. Only show analyzer in non-viewer mode. */}
+          {isStreaming && displayUrl && useWebViewMode && (
             <MjpegAnalyzer
-              streamUrl={streamUrl}
+              streamUrl={displayUrl}
               onFrame={handleWebViewFrame}
               onError={(msg) => handleWebViewStatus('error: ' + msg)}
               onStatus={handleWebViewStatus}
             />
           )}
 
-          {/* Error message */}
-          {phase === 'error' && (
+          {/* Debug info */}
+          {isStreaming && (
+            <View style={styles.debugCard}>
+              <Text style={styles.debugTitle}>DEBUG</Text>
+              {[
+                ['Mode',     bleMode ? 'BLE (real)' : 'Mock'],
+                ['HTTP',     connectStatus ?? 'connecting…'],
+                ['Bytes Rx', bytesReceived > 0 ? `${(bytesReceived / 1024).toFixed(1)} KB` : '0'],
+                ['Stream',   displayUrl ?? 'not received'],
+                ...(streamError ? [['Error', streamError]] : []),
+                ...(webViewStatus ? [['WebView', webViewStatus]] : []),
+              ].map(([label, value]) => (
+                <View key={label} style={styles.debugRow}>
+                  <Text style={styles.debugLabel}>{label}</Text>
+                  <Text style={styles.debugValue} numberOfLines={2}>{value}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Error */}
+          {isError && (
             <View style={styles.errorCard}>
               <Ionicons name="alert-circle" size={24} color={Colors.primaryDark} />
               <Text style={styles.errorText}>{errorMessage || 'An error occurred.'}</Text>
             </View>
           )}
 
-          {/* Placeholder while waiting to stream */}
+          {/* Busy placeholder */}
           {isBusy && (
             <View style={styles.graphPlaceholder}>
               <ActivityIndicator color={Colors.primary} />
@@ -297,7 +370,7 @@ export default function NewTestScreen() {
                 'Insert the cartridge into the device.',
                 'Tap START — the app connects via Bluetooth.',
                 'Your WiFi credentials are sent to the device once.',
-                'The camera stream starts and intensity is graphed live.',
+                'The camera stream appears live on this screen.',
               ].map((step, i) => (
                 <View key={i} style={styles.step}>
                   <View style={styles.stepBadge}>
@@ -315,23 +388,12 @@ export default function NewTestScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
-  flex: { flex: 1 },
-  content: {
-    padding: Spacing.md,
-    gap: Spacing.md,
-    paddingBottom: Spacing.xl,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  brand: {
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: Colors.text,
-  },
+  safe:    { flex: 1, backgroundColor: Colors.background },
+  flex:    { flex: 1 },
+  content: { padding: Spacing.md, gap: Spacing.md, paddingBottom: Spacing.xl },
+  header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  brand:   { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
+
   statusRow: {
     flexDirection: 'row',
     backgroundColor: Colors.cardBackground,
@@ -344,23 +406,10 @@ const styles = StyleSheet.create({
     gap: 4,
     backgroundColor: Colors.sectionBackground,
   },
-  statusLabel: {
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-  statusValue: {
-    fontSize: FontSize.xl,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  statusDesc: {
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    lineHeight: 16,
-    marginTop: 2,
-  },
+  statusLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: '600', letterSpacing: 0.5 },
+  statusValue: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text },
+  statusDesc:  { fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 16, marginTop: 2 },
+
   actionButton: {
     width: 110,
     backgroundColor: Colors.primary,
@@ -370,40 +419,48 @@ const styles = StyleSheet.create({
     gap: 4,
     minHeight: 110,
   },
-  actionButtonDisabled: {
-    backgroundColor: Colors.primaryLight,
+  actionButtonDisabled: { backgroundColor: Colors.primaryLight },
+  actionButtonStop:     { backgroundColor: Colors.primaryDark },
+  actionLabel: { fontSize: FontSize.sm, fontWeight: '900', color: '#fff', letterSpacing: 1 },
+
+  streamCard: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    gap: Spacing.sm,
+    padding: Spacing.sm,
   },
-  actionButtonStop: {
-    backgroundColor: Colors.primaryDark,
-  },
-  actionLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: '900',
-    color: '#fff',
+  streamCardTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.textSecondary,
     letterSpacing: 1,
+    paddingHorizontal: Spacing.xs,
   },
+  streamStats: {
+    paddingHorizontal: Spacing.xs,
+    gap: 2,
+  },
+  streamStat: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  streamStatLabel: { fontWeight: '600', color: Colors.text },
+
+  manualIpToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.sm,
+  },
+  manualIpToggleText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
+
   card: {
     backgroundColor: Colors.cardBackground,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: Spacing.sm,
   },
-  cardTitle: {
-    fontSize: FontSize.md,
-    fontWeight: '700',
-    color: Colors.text,
-    letterSpacing: 0.5,
-  },
-  cardDesc: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-  },
-  fieldLabel: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: '600',
-  },
+  cardTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text, letterSpacing: 0.5 },
+  cardDesc:  { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  fieldLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: '600' },
   input: {
     borderWidth: 1,
     borderColor: Colors.border,
@@ -413,17 +470,9 @@ const styles = StyleSheet.create({
     color: Colors.text,
     backgroundColor: Colors.background,
   },
-  passwordRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-  },
-  passwordInput: {
-    flex: 1,
-  },
-  eyeButton: {
-    padding: Spacing.sm,
-  },
+  passwordRow:    { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  passwordInput:  { flex: 1 },
+  eyeButton:      { padding: Spacing.sm },
   submitButton: {
     backgroundColor: Colors.primary,
     borderRadius: Radius.md,
@@ -431,37 +480,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: Spacing.xs,
   },
-  submitButtonDisabled: {
-    backgroundColor: Colors.primaryLight,
-  },
-  submitLabel: {
-    fontSize: FontSize.md,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: 1,
-  },
+  submitButtonDisabled: { backgroundColor: Colors.primaryLight },
+  submitLabel: { fontSize: FontSize.md, fontWeight: '700', color: '#fff', letterSpacing: 1 },
+
   debugCard: {
     backgroundColor: Colors.cardBackground,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: Spacing.sm,
   },
-  debugRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-  debugLabel: {
-    fontSize: FontSize.sm,
+  debugTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
     color: Colors.textSecondary,
-    width: 90,
+    letterSpacing: 1,
+    marginBottom: 2,
   },
-  debugValue: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.text,
-  },
+  debugRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
+  debugLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, width: 80 },
+  debugValue: { flex: 1, fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
+
   errorCard: {
     backgroundColor: Colors.cardBackground,
     borderRadius: Radius.lg,
@@ -470,28 +508,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.sm,
   },
-  errorText: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    color: Colors.primaryDark,
-    lineHeight: 20,
-  },
-  webViewToggle: {
-    backgroundColor: Colors.cardBackground,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  webViewToggleText: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
+  errorText: { flex: 1, fontSize: FontSize.sm, color: Colors.primaryDark, lineHeight: 20 },
+
   graphPlaceholder: {
     backgroundColor: Colors.cardBackground,
     borderRadius: Radius.lg,
@@ -501,34 +519,15 @@ const styles = StyleSheet.create({
     minHeight: 160,
     justifyContent: 'center',
   },
-  graphPlaceholderText: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-  },
-  step: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: Spacing.sm,
-  },
+  graphPlaceholderText: { fontSize: FontSize.sm, color: Colors.textMuted },
+
+  step: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
   stepBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 26, height: 26, borderRadius: 13,
     backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    marginTop: 1,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0, marginTop: 1,
   },
-  stepNum: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: FontSize.xs,
-  },
-  stepText: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    color: Colors.text,
-    lineHeight: 20,
-  },
+  stepNum:  { color: '#fff', fontWeight: '700', fontSize: FontSize.xs },
+  stepText: { flex: 1, fontSize: FontSize.sm, color: Colors.text, lineHeight: 20 },
 });

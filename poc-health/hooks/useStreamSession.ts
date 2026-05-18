@@ -214,6 +214,7 @@ export function useStreamSession() {
 
   // ── Real BLE flow ────────────────────────────────────────────────────────────
   async function bleProvision(ssid: string, password: string) {
+    
     if (!deviceRef.current) return;
     safeSetPhase('provisioning');
 
@@ -221,7 +222,7 @@ export function useStreamSession() {
     try {
       const ip = await new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(
-          () => reject(new Error('Timed out waiting for IP — did the ESP32 join WiFi?')),
+          () => reject(new Error('Timed out waiting for IP')),
           30_000
         );
 
@@ -231,6 +232,7 @@ export function useStreamSession() {
             if (err) { clearTimeout(timeout); sub.remove(); reject(err); return; }
             if (char?.value) {
               const ip = base64ToStr(char.value).replace(/\0/g, '').trim();
+              console.log('[BLE] Raw value:', char.value, '→ decoded IP:', ip); // ADD THIS
               if (ip) { clearTimeout(timeout); sub.remove(); resolve(ip); }
             }
           }

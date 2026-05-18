@@ -1,29 +1,75 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { Colors, FontSize } from '../constants/theme';
 
 interface Props {
   streamUrl: string;
-  onFrame: () => void;
-  onError: (msg: string) => void;
+  onFrame?: () => void;
+  onError?: (msg: string) => void;
   onStatus?: (msg: string) => void;
 }
 
-// Hidden WebView: loads the MJPEG URL into an <img> tag (WKWebView renders
-// MJPEG natively — same engine as Safari) and uses canvas pixel sampling at
-// ~30 fps to detect frame changes. Avoids fetch() which buffers
-// multipart/x-mixed-replace on iOS and never delivers chunks to JS.
+/**
+ * MjpegViewer — a VISIBLE WebView that:
+ *  1. Shows the MJPEG stream full-width using an <img> tag (WKWebView / Safari
+ *     engine handles MJPEG natively, same as tapping the URL in Safari)
+ *  2. Uses canvas pixel sampling to detect frame changes and reports them
+ *     back via postMessage so the parent can track FPS
+ */
 const makeHtml = (url: string) => `<!DOCTYPE html><html>
-<head><meta charset="utf-8"></head>
-<body style="margin:0;background:#000;overflow:hidden">
-<img id="s" crossorigin="anonymous"
-     src="${url}"
-     style="position:fixed;left:-9999px;width:1px;height:1px">
-<canvas id="c" width="8" height="8" style="display:none"></canvas>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #stream {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    #status {
+      position: fixed;
+      bottom: 8px;
+      left: 0; right: 0;
+      text-align: center;
+      color: rgba(255,255,255,0.6);
+      font-family: -apple-system, sans-serif;
+      font-size: 12px;
+    }
+    #error {
+      display: none;
+      color: #ff6b6b;
+      font-family: -apple-system, sans-serif;
+      font-size: 14px;
+      text-align: center;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <img id="stream" src="${url}" crossorigin="anonymous">
+  <canvas id="canvas" width="8" height="8" style="display:none"></canvas>
+  <div id="status">Connecting…</div>
+  <div id="error"></div>
 <script>
-var img = document.getElementById('s');
-var ctx = document.getElementById('c').getContext('2d');
-var last = null;
+var img    = document.getElementById('stream');
+var canvas = document.getElementById('canvas');
+var status = document.getElementById('status');
+var errorDiv = document.getElementById('error');
+var ctx    = canvas.getContext('2d');
+var last   = null;
+var frameCount = 0;
 var pollStarted = false;
 
 function sample() {
@@ -38,37 +84,43 @@ function sample() {
 
 function poll() {
   var h = sample();
-  if (h !== null) {
-    if (last !== null && h !== last) {
-      window.ReactNativeWebView.postMessage('frame');
-    }
-    last = h;
+  if (h !== null && last !== null && h !== last) {
+    frameCount++;
+    status.textContent = 'Frame ' + frameCount;
+    window.ReactNativeWebView.postMessage('frame');
   }
+  if (h !== null) last = h;
   requestAnimationFrame(poll);
 }
 
 img.onload = function() {
+  status.textContent = 'Stream connected';
   window.ReactNativeWebView.postMessage('stream_ok');
   if (!pollStarted) { pollStarted = true; poll(); }
 };
+
 img.onerror = function() {
-  window.ReactNativeWebView.postMessage(JSON.stringify({ error: 'img failed to load: ' + img.src }));
+  img.style.display = 'none';
+  errorDiv.style.display = 'block';
+  errorDiv.textContent = 'Could not load stream. Make sure your phone and device are on the same WiFi network.';
+  status.style.display = 'none';
+  window.ReactNativeWebView.postMessage(JSON.stringify({ error: 'Stream failed to load: ' + img.src }));
 };
 </script>
 </body></html>`;
 
-export default function MjpegAnalyzer({ streamUrl, onFrame, onError, onStatus }: Props) {
+export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: Props) {
   function handleMessage(event: { nativeEvent: { data: string } }) {
     const data = event.nativeEvent.data;
     if (data === 'frame') {
-      onFrame();
+      onFrame?.();
     } else if (data === 'stream_ok') {
-      onStatus?.('img loaded — counting frames');
+      onStatus?.('Stream connected');
     } else {
       try {
         const payload = JSON.parse(data);
         if (payload.error) {
-          onError(payload.error);
+          onError?.(payload.error);
           onStatus?.('error: ' + payload.error);
         }
       } catch {}
@@ -76,17 +128,33 @@ export default function MjpegAnalyzer({ streamUrl, onFrame, onError, onStatus }:
   }
 
   return (
-    <WebView
-      source={{ html: makeHtml(streamUrl) }}
-      style={styles.hidden}
-      onMessage={handleMessage}
-      originWhitelist={['*']}
-      mixedContentMode="always"
-      javaScriptEnabled
-    />
+    <View style={styles.container}>
+      <WebView
+        source={{ html: makeHtml(streamUrl) }}
+        style={styles.webview}
+        onMessage={handleMessage}
+        originWhitelist={['*']}
+        mixedContentMode="always"
+        javaScriptEnabled
+        scrollEnabled={false}
+        bounces={false}
+        allowsInlineMediaPlayback
+        mediaPlaybackRequiresUserAction={false}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  hidden: { width: 0, height: 0, opacity: 0 },
+  container: {
+    width: '100%',
+    aspectRatio: 800 / 640,   /* matches CAM_H_RES / CAM_V_RES in camera.c */
+    backgroundColor: '#000',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  webview: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
 });
