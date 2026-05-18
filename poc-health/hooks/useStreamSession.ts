@@ -99,7 +99,7 @@ export function useStreamSession() {
     abortRef.current = null;
   }
 
-  // ── Fetch stream reader ──────────────────────────────────────────────────────
+  // ── Fetch stream reader ──────────────────────────────────────────────────
   async function startFetchStream(url: string, attempt = 1) {
     if (cancelledRef.current) return;
     const MAX_ATTEMPTS = 10;
@@ -121,10 +121,8 @@ export function useStreamSession() {
         return;
       }
 
-      // If WebView mode is active, the hidden MjpegAnalyzer WebView handles
-      // frame counting — native fetch just confirmed connectivity.
       if (useWebViewRef.current) {
-        console.log('[stream] WebView mode active — handing off to MjpegAnalyzer');
+        console.log('[stream] WebView mode active — handing off to MjpegViewer');
         return;
       }
 
@@ -132,26 +130,17 @@ export function useStreamSession() {
       let tail = new Uint8Array(0);
 
       while (!cancelledRef.current) {
-        console.log('[stream] calling reader.read()');
         const { value, done } = await reader.read();
-        console.log('[stream] read returned done=', done, 'bytes=', value?.length ?? 0);
         if (done) break;
         if (!value?.length) continue;
 
-        // Track total bytes received for UI diagnostic.
         bytesRef.current += value.length;
         setBytesReceived(bytesRef.current);
 
-        // Combine leftover tail with new chunk.
         const chunk = new Uint8Array(tail.length + value.length);
         chunk.set(tail);
         chunk.set(value, tail.length);
 
-        const preview = Array.from(chunk.slice(0, 20))
-          .map(b => b.toString(16).padStart(2, '0')).join(' ');
-        console.log('[stream] chunk bytes=', chunk.length, 'first20=', preview);
-
-        // Count "--frame" boundaries.
         let i = 0;
         while (i <= chunk.length - FRAME_BOUNDARY.length) {
           let match = true;
@@ -167,8 +156,6 @@ export function useStreamSession() {
           }
         }
 
-        // Keep only the last (boundary.length - 1) bytes as tail in case
-        // the boundary is split across two chunks.
         tail = chunk.slice(Math.max(0, chunk.length - (FRAME_BOUNDARY.length - 1)));
       }
     } catch (err: any) {
@@ -184,23 +171,18 @@ export function useStreamSession() {
     }
   }
 
-  // ── Mock flow ────────────────────────────────────────────────────────────────
+  // ── Mock flow ────────────────────────────────────────────────────────────
   async function mockFlow() {
     await delay(2000);
     if (cancelledRef.current) return;
     safeSetPhase('ble_connected');
     await delay(400);
     if (cancelledRef.current) return;
-
-    let stored: string | null = null;
-    try { stored = await AsyncStorage.getItem(WIFI_KEY); } catch {}
-    if (!stored) { safeSetPhase('wifi_setup'); return; }
-
-    const creds = JSON.parse(stored);
-    await mockProvision(creds.ssid, creds.password);
+    // Always show WiFi setup so user can enter credentials
+    safeSetPhase('wifi_setup');
   }
 
-  async function mockProvision(_ssid: string, _password: string) {
+  async function mockProvision(ssid: string, password: string) {
     safeSetPhase('provisioning');
     await delay(1500);
     if (cancelledRef.current) return;
@@ -212,9 +194,8 @@ export function useStreamSession() {
     safeSetPhase('streaming');
   }
 
-  // ── Real BLE flow ────────────────────────────────────────────────────────────
+  // ── Real BLE flow ────────────────────────────────────────────────────────
   async function bleProvision(ssid: string, password: string) {
-    
     if (!deviceRef.current) return;
     safeSetPhase('provisioning');
 
@@ -222,7 +203,7 @@ export function useStreamSession() {
     try {
       const ip = await new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(
-          () => reject(new Error('Timed out waiting for IP')),
+          () => reject(new Error('Timed out waiting for IP — did the ESP32 join WiFi?')),
           30_000
         );
 
@@ -232,7 +213,7 @@ export function useStreamSession() {
             if (err) { clearTimeout(timeout); sub.remove(); reject(err); return; }
             if (char?.value) {
               const ip = base64ToStr(char.value).replace(/\0/g, '').trim();
-              console.log('[BLE] Raw value:', char.value, '→ decoded IP:', ip); // ADD THIS
+              console.log('[BLE] Raw value:', char.value, '→ decoded IP:', ip);
               if (ip) { clearTimeout(timeout); sub.remove(); resolve(ip); }
             }
           }
@@ -241,17 +222,23 @@ export function useStreamSession() {
         device
           .writeCharacteristicWithoutResponseForService(SERVICE_UUID, SSID_UUID, strToBase64(ssid))
           .then(() => delay(200))
-          .then(() =>
-            device.writeCharacteristicWithoutResponseForService(SERVICE_UUID, PASS_UUID, strToBase64(password))
-          )
+          .then(() => {
+            console.log('[BLE] Sending SSID:', ssid, 'Password length:', password.length);
+            return device.writeCharacteristicWithoutResponseForService(
+              SERVICE_UUID, PASS_UUID, strToBase64(password)
+            );
+          })
           .catch((err: any) => { clearTimeout(timeout); sub.remove(); reject(err); });
       });
+
+      console.log('[BLE] Got IP:', ip);
 
       if (cancelledRef.current) return;
       safeSetPhase('connecting');
       streamStartRef.current = Date.now();
       const url = `http://${ip}/stream`;
       setStreamUrl(url);
+      console.log('[stream] Stream URL set to:', url);
       startFetchStream(url);
       safeSetPhase('streaming');
     } catch (err: any) {
@@ -262,7 +249,7 @@ export function useStreamSession() {
     }
   }
 
-  // ── WebView mode ─────────────────────────────────────────────────────────────
+  // ── WebView mode ─────────────────────────────────────────────────────────
   const enableWebView = useCallback(() => {
     stopStream();
     useWebViewRef.current = true;
@@ -279,7 +266,7 @@ export function useStreamSession() {
     setWebViewStatus(msg);
   }, []);
 
-  // ── Public API ───────────────────────────────────────────────────────────────
+  // ── Public API ───────────────────────────────────────────────────────────
   const start = useCallback(async () => {
     cancelledRef.current = false;
     useWebViewRef.current = false;
@@ -296,6 +283,9 @@ export function useStreamSession() {
     setConnectStatus(null);
     setBleMode(false);
     safeSetPhase('scanning');
+
+    // Clear any previously saved credentials so the WiFi form always appears
+    try { await AsyncStorage.removeItem(WIFI_KEY); } catch {}
 
     const ble = getBle();
     if (!ble) {
@@ -351,16 +341,14 @@ export function useStreamSession() {
 
     if (cancelledRef.current || !deviceRef.current) return;
 
-    let stored: string | null = null;
-    try { stored = await AsyncStorage.getItem(WIFI_KEY); } catch {}
-    if (!stored) { safeSetPhase('wifi_setup'); return; }
-
-    const { ssid, password } = JSON.parse(stored);
-    await bleProvision(ssid, password);
+    // Always show WiFi setup so user can enter fresh credentials
+    safeSetPhase('wifi_setup');
   }, []);
 
   const submitWifiCredentials = useCallback(async (ssid: string, password: string) => {
+    // Save credentials for reference but we clear them on each start
     try { await AsyncStorage.setItem(WIFI_KEY, JSON.stringify({ ssid, password })); } catch {}
+    console.log('[WiFi] Submitting — SSID:', ssid, 'Password length:', password.length);
     if (deviceRef.current) {
       await bleProvision(ssid, password);
     } else {
