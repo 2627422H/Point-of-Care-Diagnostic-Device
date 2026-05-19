@@ -11,7 +11,7 @@ export default function RootLayout() {
   // Re-lock when the app returns from background
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (next) => {
-      if (appState.current.match(/inactive|background/) && next === 'active') {
+      if (appState.current === 'background' && next === 'active') {
         const hasHardware = await LocalAuthentication.hasHardwareAsync();
         const isEnrolled = await LocalAuthentication.isEnrolledAsync();
         if (hasHardware && isEnrolled) {
