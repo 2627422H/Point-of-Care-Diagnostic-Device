@@ -19,6 +19,8 @@
         "NSBluetoothAlwaysUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
         "NSBluetoothPeripheralUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
         "NSLocalNetworkUsageDescription": "POC Health connects to the diagnostic device camera on your local network.",
+        "NSPhotoLibraryUsageDescription": "POC Health uses your photo library to set your profile picture.",
+        "NSCameraUsageDescription": "POC Health uses your camera to take a profile photo.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
           "NSAllowsArbitraryLoadsInWebContent": true,
@@ -48,6 +50,13 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "POC Health uses your photo library to set your profile picture.",
+          "cameraPermission": "POC Health uses your camera to take a profile photo."
+        }
+      ],
       [
         "react-native-ble-plx",
         {
