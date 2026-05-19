@@ -23,19 +23,19 @@ const PROFILE_KEY = 'poc_profile';
 interface ProfileData {
   name: string;
   photoUri: string | null;
-  cycleLength: string;
-  height: string;   // cm
-  weight: string;   // kg
-  age: string;
+  cycleLength: number | null;
+  height: number | null;  // cm
+  weight: number | null;  // kg
+  age: number | null;
 }
 
 const DEFAULT_PROFILE: ProfileData = {
   name: '',
   photoUri: null,
-  cycleLength: '28',
-  height: '',
-  weight: '',
-  age: '',
+  cycleLength: 28,
+  height: null,
+  weight: null,
+  age: null,
 };
 
 async function loadProfile(): Promise<ProfileData> {
@@ -53,12 +53,9 @@ async function saveProfile(data: ProfileData) {
   } catch {}
 }
 
-function calcBmi(height: string, weight: string): string | null {
-  const h = parseFloat(height);
-  const w = parseFloat(weight);
-  if (!h || !w || h <= 0) return null;
-  const bmi = w / (h / 100) ** 2;
-  return bmi.toFixed(1);
+function calcBmi(height: number | null, weight: number | null): string | null {
+  if (!height || !weight || height <= 0) return null;
+  return (weight / (height / 100) ** 2).toFixed(1);
 }
 
 function bmiLabel(bmi: string): string {
@@ -73,17 +70,15 @@ function bmiLabel(bmi: string): string {
 function FieldRow({
   label,
   value,
-  onChangeText,
+  onChange,
   placeholder,
   unit,
-  keyboardType = 'default',
 }: {
   label: string;
-  value: string;
-  onChangeText: (v: string) => void;
+  value: number | null;
+  onChange: (v: number | null) => void;
   placeholder: string;
   unit?: string;
-  keyboardType?: 'default' | 'numeric' | 'decimal-pad';
 }) {
   return (
     <View style={styles.fieldRow}>
@@ -91,11 +86,14 @@ function FieldRow({
       <View style={styles.fieldInputWrap}>
         <TextInput
           style={styles.fieldInput}
-          value={value}
-          onChangeText={onChangeText}
+          value={value !== null ? String(value) : ''}
+          onChangeText={(raw) => {
+            const digits = raw.replace(/[^0-9]/g, '');
+            onChange(digits === '' ? null : parseInt(digits, 10));
+          }}
           placeholder={placeholder}
           placeholderTextColor={Colors.textMuted}
-          keyboardType={keyboardType}
+          keyboardType="numeric"
           returnKeyType="done"
         />
         {unit && <Text style={styles.fieldUnit}>{unit}</Text>}
@@ -231,37 +229,33 @@ export default function ProfileScreen() {
           <FieldRow
             label="Cycle length"
             value={profile.cycleLength}
-            onChangeText={(v) => update({ cycleLength: v })}
+            onChange={(v) => update({ cycleLength: v })}
             placeholder="28"
             unit="days"
-            keyboardType="numeric"
           />
           <View style={styles.divider} />
           <FieldRow
             label="Height"
             value={profile.height}
-            onChangeText={(v) => update({ height: v })}
+            onChange={(v) => update({ height: v })}
             placeholder="170"
             unit="cm"
-            keyboardType="numeric"
           />
           <View style={styles.divider} />
           <FieldRow
             label="Weight"
             value={profile.weight}
-            onChangeText={(v) => update({ weight: v })}
+            onChange={(v) => update({ weight: v })}
             placeholder="65"
             unit="kg"
-            keyboardType="decimal-pad"
           />
           <View style={styles.divider} />
           <FieldRow
             label="Age"
             value={profile.age}
-            onChangeText={(v) => update({ age: v })}
+            onChange={(v) => update({ age: v })}
             placeholder="30"
             unit="yrs"
-            keyboardType="numeric"
           />
         </View>
 
