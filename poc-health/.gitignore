@@ -42,3 +42,5 @@ yarn-error.*
 
 # lock files
 package-lock.json
+
+/scripts

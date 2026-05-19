@@ -128,25 +128,46 @@ export default function ProfileScreen() {
   }
 
   async function pickPhoto() {
-    const action = await new Promise<'camera' | 'library' | 'cancel'>((resolve) => {
+    const hasPhoto = !!profile.photoUri;
+
+    const action = await new Promise<'camera' | 'library' | 'remove' | 'cancel'>((resolve) => {
       if (Platform.OS === 'ios') {
+        const options = hasPhoto
+          ? ['Take Photo', 'Choose from Library', 'Remove Photo', 'Cancel']
+          : ['Take Photo', 'Choose from Library', 'Cancel'];
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ['Take Photo', 'Choose from Library', 'Cancel'],
-            cancelButtonIndex: 2,
+            options,
+            cancelButtonIndex: options.length - 1,
+            destructiveButtonIndex: hasPhoto ? 2 : undefined,
           },
-          (i) => resolve(i === 0 ? 'camera' : i === 1 ? 'library' : 'cancel')
+          (i) => {
+            if (hasPhoto) {
+              resolve(i === 0 ? 'camera' : i === 1 ? 'library' : i === 2 ? 'remove' : 'cancel');
+            } else {
+              resolve(i === 0 ? 'camera' : i === 1 ? 'library' : 'cancel');
+            }
+          }
         );
       } else {
-        Alert.alert('Profile Photo', 'Choose a source', [
+        const buttons: Parameters<typeof Alert.alert>[2] = [
           { text: 'Camera',  onPress: () => resolve('camera') },
           { text: 'Library', onPress: () => resolve('library') },
-          { text: 'Cancel',  onPress: () => resolve('cancel'), style: 'cancel' },
-        ]);
+        ];
+        if (hasPhoto) {
+          buttons.push({ text: 'Remove Photo', onPress: () => resolve('remove'), style: 'destructive' });
+        }
+        buttons.push({ text: 'Cancel', onPress: () => resolve('cancel'), style: 'cancel' });
+        Alert.alert('Profile Photo', 'Choose a source', buttons);
       }
     });
 
     if (action === 'cancel') return;
+
+    if (action === 'remove') {
+      update({ photoUri: null });
+      return;
+    }
 
     if (action === 'camera') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
