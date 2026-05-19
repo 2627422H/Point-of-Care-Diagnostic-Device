@@ -255,7 +255,7 @@ export default function HistoryScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
-          <>
+          <View style={styles.listHeader}>
             <Text style={styles.title}>History</Text>
 
             {/* Calendar */}
@@ -300,7 +300,7 @@ export default function HistoryScreen() {
             )}
 
             <Text style={styles.sectionLabel}>ALL TESTS</Text>
-          </>
+          </View>
         }
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
@@ -332,7 +332,10 @@ const styles = StyleSheet.create({
   content: {
     padding: Spacing.md,
     paddingBottom: Spacing.xl,
-    gap: Spacing.lg,
+  },
+  listHeader: {
+    gap: Spacing.md,
+    marginBottom: Spacing.sm,
   },
   title: {
     fontSize: FontSize.xl,
