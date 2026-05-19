@@ -150,6 +150,20 @@ export default function ProfileScreen() {
 
     if (action === 'cancel') return;
 
+    if (action === 'camera') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera access is required to take a photo.');
+        return;
+      }
+    } else {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Photo library access is required to choose a photo.');
+        return;
+      }
+    }
+
     const launch =
       action === 'camera'
         ? ImagePicker.launchCameraAsync
