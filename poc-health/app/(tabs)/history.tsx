@@ -15,6 +15,8 @@ import { useAppStore } from '../../store/useAppStore';
 import type { TestResult } from '../../types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+// Cell width: screen minus content padding (md×2) and card padding (md×2), split across 7 columns
+const CELL_SIZE = Math.floor((SCREEN_WIDTH - Spacing.md * 4) / 7);
 
 const SEVERITY_COLORS: Record<string, string> = {
   None: Colors.textMuted,
@@ -23,9 +25,18 @@ const SEVERITY_COLORS: Record<string, string> = {
   High: Colors.primary,
 };
 
-function formatDate(timestamp: number): string {
-  const d = new Date(timestamp);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const DAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatDate(ts: number): string {
+  return new Date(ts).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
 }
 
 function estrogenBadgeColor(level: number): string {
@@ -34,15 +45,159 @@ function estrogenBadgeColor(level: number): string {
   return Colors.textMuted;
 }
 
+function toDateKey(year: number, month: number, day: number): string {
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function buildDateMap(results: TestResult[]): Map<string, TestResult> {
+  const map = new Map<string, TestResult>();
+  for (const r of results) {
+    const d = new Date(r.timestamp);
+    const key = toDateKey(d.getFullYear(), d.getMonth(), d.getDate());
+    if (!map.has(key)) map.set(key, r); // one result per day
+  }
+  return map;
+}
+
+function getCalendarCells(year: number, month: number): (number | null)[] {
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+// ── CalendarView ─────────────────────────────────────────────────────────────
+
+function CalendarView({
+  results,
+  selectedId,
+  onSelect,
+}: {
+  results: TestResult[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const today = new Date();
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+
+  const dateMap = buildDateMap(results);
+  const cells = getCalendarCells(viewYear, viewMonth);
+  const todayKey = toDateKey(today.getFullYear(), today.getMonth(), today.getDate());
+
+  const selectedDateKey = (() => {
+    if (!selectedId) return null;
+    const r = results.find(r => r.id === selectedId);
+    if (!r) return null;
+    const d = new Date(r.timestamp);
+    return toDateKey(d.getFullYear(), d.getMonth(), d.getDate());
+  })();
+
+  function goToPrev() {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
+    else { setViewMonth(m => m - 1); }
+  }
+  function goToNext() {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
+    else { setViewMonth(m => m + 1); }
+  }
+
+  return (
+    <View style={styles.calCard}>
+      {/* Month navigation */}
+      <View style={styles.calHeader}>
+        <TouchableOpacity onPress={goToPrev} style={styles.calNavBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="chevron-back" size={20} color={Colors.text} />
+        </TouchableOpacity>
+        <Text style={styles.calMonthLabel}>{MONTH_NAMES[viewMonth]} {viewYear}</Text>
+        <TouchableOpacity onPress={goToNext} style={styles.calNavBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="chevron-forward" size={20} color={Colors.text} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Day-of-week header */}
+      <View style={styles.calDayRow}>
+        {DAY_LABELS.map(d => (
+          <Text key={d} style={styles.calDayLabel}>{d}</Text>
+        ))}
+      </View>
+
+      {/* Grid */}
+      <View style={styles.calGrid}>
+        {cells.map((day, idx) => {
+          if (day === null) return <View key={`blank-${idx}`} style={styles.calCell} />;
+
+          const key = toDateKey(viewYear, viewMonth, day);
+          const result = dateMap.get(key);
+          const isToday = key === todayKey;
+          const isSelected = key === selectedDateKey;
+          const hasTest = !!result;
+
+          return (
+            <TouchableOpacity
+              key={key}
+              style={[
+                styles.calCell,
+                isSelected && styles.calCellSelected,
+                isToday && !isSelected && styles.calCellToday,
+              ]}
+              onPress={() => result && onSelect(result.id)}
+              activeOpacity={hasTest ? 0.7 : 1}
+              disabled={!hasTest}
+            >
+              <Text style={[
+                styles.calDayNum,
+                isSelected && styles.calDayNumSelected,
+                isToday && !isSelected && styles.calDayNumToday,
+                !hasTest && styles.calDayNumFaded,
+              ]}>
+                {day}
+              </Text>
+              {hasTest && (
+                <View style={[
+                  styles.calDot,
+                  { backgroundColor: isSelected ? '#fff' : estrogenBadgeColor(result!.estrogenLevel) },
+                ]} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* Legend */}
+      <View style={styles.calLegend}>
+        <View style={styles.calLegendItem}>
+          <View style={[styles.calDot, { backgroundColor: Colors.primary }]} />
+          <Text style={styles.calLegendText}>≥420 pg/ml</Text>
+        </View>
+        <View style={styles.calLegendItem}>
+          <View style={[styles.calDot, { backgroundColor: '#EF6C00' }]} />
+          <Text style={styles.calLegendText}>200–419</Text>
+        </View>
+        <View style={styles.calLegendItem}>
+          <View style={[styles.calDot, { backgroundColor: Colors.textMuted }]} />
+          <Text style={styles.calLegendText}>{'<'}200 pg/ml</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ── ResultRow ─────────────────────────────────────────────────────────────────
+
 function ResultRow({
   result,
-  onPress,
   expanded,
+  onPress,
 }: {
   result: TestResult;
-  onPress: () => void;
   expanded: boolean;
+  onPress: () => void;
 }) {
+  const badgeColor = estrogenBadgeColor(result.estrogenLevel);
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.75}>
       <View style={styles.rowMain}>
@@ -50,7 +205,7 @@ function ResultRow({
           <Text style={styles.rowDate}>{formatDate(result.timestamp)}</Text>
           <Text style={styles.rowCycleDay}>Cycle day {result.cycleDay}</Text>
         </View>
-        <View style={[styles.estrogenBadge, { backgroundColor: estrogenBadgeColor(result.estrogenLevel) }]}>
+        <View style={[styles.estrogenBadge, { backgroundColor: badgeColor }]}>
           <Text style={styles.estrogenBadgeText}>{Math.round(result.estrogenLevel)}</Text>
           <Text style={styles.estrogenUnit}>pg/ml</Text>
         </View>
@@ -60,7 +215,12 @@ function ResultRow({
         <View style={styles.symptomsExpanded}>
           {result.symptoms.map((s) => (
             <View key={s.id} style={styles.symptomLine}>
-              <Ionicons name={s.icon as React.ComponentProps<typeof Ionicons>['name']} size={16} color={SEVERITY_COLORS[s.severity] ?? Colors.text} style={styles.symptomIcon} />
+              <Ionicons
+                name={s.icon as React.ComponentProps<typeof Ionicons>['name']}
+                size={16}
+                color={SEVERITY_COLORS[s.severity] ?? Colors.text}
+                style={styles.symptomIcon}
+              />
               <Text style={styles.symptomName}>{s.name}</Text>
               <Text style={[styles.severityLabel, { color: SEVERITY_COLORS[s.severity] ?? Colors.text }]}>
                 {s.severity}
@@ -73,35 +233,48 @@ function ResultRow({
   );
 }
 
+// ── HistoryScreen ─────────────────────────────────────────────────────────────
+
 export default function HistoryScreen() {
   const { results } = useAppStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const sorted = [...results].sort((a, b) => b.timestamp - a.timestamp);
-
+  const chartData = sorted.slice().reverse();
   const hasEnoughForChart = sorted.length >= 2;
-  const chartData = sorted.slice().reverse(); // oldest first for left-to-right trend
+
+  function handleDaySelect(id: string) {
+    setExpandedId(prev => prev === id ? null : id);
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
       <FlatList
         data={sorted}
-        keyExtractor={(r) => r.id}
+        keyExtractor={r => r.id}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           <>
             <Text style={styles.title}>History</Text>
 
+            {/* Calendar */}
+            <CalendarView
+              results={sorted}
+              selectedId={expandedId}
+              onSelect={handleDaySelect}
+            />
+
+            {/* Trend chart */}
             {hasEnoughForChart ? (
               <View style={styles.chartCard}>
-                <Text style={styles.chartTitle}>ESTROGEN TREND</Text>
+                <Text style={styles.sectionLabel}>ESTROGEN TREND</Text>
                 <LineChart
                   data={{
-                    labels: chartData.map((r) => `D${r.cycleDay}`),
-                    datasets: [{ data: chartData.map((r) => r.estrogenLevel) }],
+                    labels: chartData.map(r => `D${r.cycleDay}`),
+                    datasets: [{ data: chartData.map(r => r.estrogenLevel) }],
                   }}
-                  width={SCREEN_WIDTH - Spacing.md * 2 - Spacing.md * 2}
+                  width={SCREEN_WIDTH - Spacing.md * 4}
                   height={160}
                   chartConfig={{
                     backgroundColor: Colors.cardBackground,
@@ -119,6 +292,7 @@ export default function HistoryScreen() {
               </View>
             ) : (
               <View style={styles.chartPlaceholder}>
+                <Ionicons name="analytics-outline" size={28} color={Colors.textMuted} />
                 <Text style={styles.chartPlaceholderText}>
                   Run at least 2 tests to see your estrogen trend.
                 </Text>
@@ -128,8 +302,10 @@ export default function HistoryScreen() {
             <Text style={styles.sectionLabel}>ALL TESTS</Text>
           </>
         }
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
           <View style={styles.empty}>
+            <Ionicons name="flask-outline" size={40} color={Colors.textMuted} />
             <Text style={styles.emptyText}>No tests recorded yet.</Text>
             <Text style={styles.emptySubtext}>Run your first test from the New Test tab.</Text>
           </View>
@@ -146,6 +322,8 @@ export default function HistoryScreen() {
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -154,24 +332,112 @@ const styles = StyleSheet.create({
   content: {
     padding: Spacing.md,
     paddingBottom: Spacing.xl,
-    gap: Spacing.md,
+    gap: Spacing.lg,
   },
   title: {
     fontSize: FontSize.xl,
     fontWeight: '700',
     color: Colors.text,
   },
+
+  // ── Calendar ────────────────────────────────────────────────────────────────
+  calCard: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  calHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.xs,
+  },
+  calNavBtn: {
+    padding: Spacing.xs,
+  },
+  calMonthLabel: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  calDayRow: {
+    flexDirection: 'row',
+    marginBottom: 2,
+  },
+  calDayLabel: {
+    width: CELL_SIZE,
+    textAlign: 'center',
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    letterSpacing: 0.3,
+  },
+  calGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calCell: {
+    width: CELL_SIZE,
+    height: CELL_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.sm,
+    gap: 2,
+  },
+  calCellSelected: {
+    backgroundColor: Colors.primary,
+  },
+  calCellToday: {
+    backgroundColor: Colors.sectionBackground,
+  },
+  calDayNum: {
+    fontSize: FontSize.sm,
+    fontWeight: '500',
+    color: Colors.text,
+  },
+  calDayNumSelected: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  calDayNumToday: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
+  calDayNumFaded: {
+    color: Colors.textMuted,
+    fontWeight: '400',
+  },
+  calDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+  },
+  calLegend: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: Spacing.md,
+    marginTop: Spacing.xs,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  calLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  calLegendText: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+  },
+
+  // ── Chart ───────────────────────────────────────────────────────────────────
   chartCard: {
     backgroundColor: Colors.cardBackground,
     borderRadius: Radius.lg,
     padding: Spacing.md,
-  },
-  chartTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: Colors.textSecondary,
-    letterSpacing: 1,
-    marginBottom: Spacing.sm,
+    gap: Spacing.sm,
   },
   chart: {
     borderRadius: Radius.md,
@@ -182,17 +448,23 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     padding: Spacing.lg,
     alignItems: 'center',
+    gap: Spacing.sm,
   },
   chartPlaceholderText: {
     fontSize: FontSize.sm,
     color: Colors.textMuted,
     textAlign: 'center',
   },
+
+  // ── List ────────────────────────────────────────────────────────────────────
   sectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: '700',
     color: Colors.textSecondary,
     letterSpacing: 1,
+  },
+  separator: {
+    height: Spacing.sm,
   },
   row: {
     backgroundColor: Colors.cardBackground,
@@ -206,7 +478,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rowLeft: {
-    gap: 2,
+    gap: 3,
   },
   rowDate: {
     fontSize: FontSize.md,
@@ -238,7 +510,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.border,
     paddingTop: Spacing.sm,
-    gap: 6,
+    gap: Spacing.sm,
   },
   symptomLine: {
     flexDirection: 'row',
@@ -260,7 +532,7 @@ const styles = StyleSheet.create({
   empty: {
     alignItems: 'center',
     paddingVertical: Spacing.xl,
-    gap: Spacing.sm,
+    gap: Spacing.md,
   },
   emptyText: {
     fontSize: FontSize.md,
