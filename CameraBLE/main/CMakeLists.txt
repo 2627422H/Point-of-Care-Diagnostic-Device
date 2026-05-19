@@ -4,6 +4,7 @@ idf_component_register(
         "camera.c"
         "ble_server.c"
         "wifi_stream.c"
+        "rgb_led.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -14,6 +15,7 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_jpeg
         esp_hw_support
+        esp_driver_ledc
         bt
         esp_wifi
         esp_netif
