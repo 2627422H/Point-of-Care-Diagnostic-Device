@@ -15,9 +15,13 @@ export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: P
   const viewerUrl = streamUrl.replace('/stream', '/');
 
   function handleMessage(event: { nativeEvent: { data: string } }) {
+    const raw = event.nativeEvent.data;
+    // Legacy plain-string messages from older firmware
+    if (raw === 'frame')     { onFrame?.(128); return; }
+    if (raw === 'stream_ok') { onStatus?.('Stream connected'); return; }
     try {
-      const payload = JSON.parse(event.nativeEvent.data);
-      if (payload.t === 'f')   onFrame?.(payload.b ?? 0);
+      const payload = JSON.parse(raw);
+      if (payload.t === 'f')        onFrame?.(payload.b ?? 0);
       else if (payload.t === 'ok')  onStatus?.('Stream connected');
       else if (payload.t === 'err') onError?.('Stream image failed to load');
       else if (payload.error)       onError?.(payload.error);

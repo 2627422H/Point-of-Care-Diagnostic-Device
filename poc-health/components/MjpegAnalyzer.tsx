@@ -59,8 +59,11 @@ img.onerror = function() {
 
 export default function MjpegAnalyzer({ streamUrl, onFrame, onError, onStatus }: Props) {
   function handleMessage(event: { nativeEvent: { data: string } }) {
+    const raw = event.nativeEvent.data;
+    if (raw === 'frame')     { onFrame(128); return; }
+    if (raw === 'stream_ok') { onStatus?.('img loaded — counting frames'); return; }
     try {
-      const payload = JSON.parse(event.nativeEvent.data);
+      const payload = JSON.parse(raw);
       if (payload.t === 'f')        onFrame(payload.b ?? 0);
       else if (payload.t === 'ok')  onStatus?.('img loaded — counting frames');
       else if (payload.t === 'err') { onError('img load failed'); onStatus?.('error: img load failed'); }

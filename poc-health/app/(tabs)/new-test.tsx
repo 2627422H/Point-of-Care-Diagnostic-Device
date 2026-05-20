@@ -66,6 +66,8 @@ export default function NewTestScreen() {
     webViewStatus,
     recordingState,
     recordingProgress,
+    recordingFetching,
+    recordingError,
     recordingResult,
     start,
     stop,
@@ -208,15 +210,15 @@ export default function NewTestScreen() {
                   {fps}
                 </Text>
                 <Text style={styles.streamStat} numberOfLines={1}>
-                  <Text style={styles.streamStatLabel}>URL: </Text>
-                  {displayUrl}
+                  <Text style={styles.streamStatLabel}>Viewer: </Text>
+                  {displayUrl?.replace('/stream', '/')}
                 </Text>
               </View>
             </View>
           ) : null}
 
           {/* ── RECORDING PANEL ── */}
-          {isStreaming && streamUrl && (
+          {isStreaming && displayUrl && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>RECORD SESSION</Text>
 
@@ -247,12 +249,27 @@ export default function NewTestScreen() {
                     placeholderTextColor={Colors.textMuted}
                   />
 
+                  {recordingError && (
+                    <View style={styles.recordingErrorRow}>
+                      <Ionicons name="alert-circle-outline" size={16} color={Colors.primaryDark} />
+                      <Text style={styles.recordingErrorText}>{recordingError}</Text>
+                    </View>
+                  )}
+
                   <TouchableOpacity
-                    style={styles.submitButton}
-                    onPress={() => startRecording({ curve: selectedCurve, duration: parseInt(duration, 10) || 10000 })}
+                    style={[styles.submitButton, recordingFetching && styles.submitButtonDisabled]}
+                    onPress={() => startRecording({
+                      curve: selectedCurve,
+                      duration: parseInt(duration, 10) || 10000,
+                      displayUrl,
+                    })}
+                    disabled={recordingFetching}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.submitLabel}>START RECORDING</Text>
+                    {recordingFetching
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={styles.submitLabel}>START RECORDING</Text>
+                    }
                   </TouchableOpacity>
                 </>
               )}
@@ -680,6 +697,16 @@ const styles = StyleSheet.create({
   curveChipActive:    { backgroundColor: Colors.primary, borderColor: Colors.primary },
   curveChipText:      { fontSize: FontSize.sm, color: Colors.text, fontWeight: '600' },
   curveChipTextActive:{ color: '#fff' },
+
+  recordingErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    backgroundColor: '#FEE2E2',
+    borderRadius: Radius.sm,
+    padding: Spacing.sm,
+  },
+  recordingErrorText: { flex: 1, fontSize: FontSize.sm, color: Colors.primaryDark },
 
   recordingActive: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
   recordingLabel:  { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },

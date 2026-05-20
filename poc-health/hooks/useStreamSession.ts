@@ -392,6 +392,8 @@ export function useStreamSession() {
   // ── Recording session ────────────────────────────────────────────────────
   const [recordingState, setRecordingState] = useState<'idle' | 'active' | 'done'>('idle');
   const [recordingProgress, setRecordingProgress] = useState(0);
+  const [recordingFetching, setRecordingFetching] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingResult, setRecordingResult] = useState<{
     curve: 0 | 1 | 2 | 3;
     durationMs: number;
@@ -410,18 +412,36 @@ export function useStreamSession() {
     duration: number;
     r?: number; g?: number; b?: number;
     step?: number;
+    displayUrl?: string | null;  // caller passes the URL actually being displayed
   }) => {
-    const ip = streamUrl ? streamUrl.replace('/stream', '').replace('http://', '') : null;
-    if (!ip) return;
+    setRecordingError(null);
 
-    const { curve, duration, r = 255, g = 255, b = 255, step = 10 } = params;
-    const url = `http://${ip}/record?curve=${curve}&r=${r}&g=${g}&b=${b}&duration=${duration}&step=${step}`;
-
-    try {
-      await fetch(url);
-    } catch {
+    // Prefer the caller's displayUrl (handles manual IP override), fall back to hook streamUrl
+    const base = (params.displayUrl ?? streamUrl ?? '')
+      .replace('/stream', '')
+      .replace(/\/$/, '');
+    if (!base) {
+      setRecordingError('No device URL — connect to the device first');
       return;
     }
+
+    const { curve, duration, r = 255, g = 255, b = 255, step = 10 } = params;
+    const url = `${base}/record?curve=${curve}&r=${r}&g=${g}&b=${b}&duration=${duration}&step=${step}`;
+
+    setRecordingFetching(true);
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) {
+        setRecordingError(`Device returned HTTP ${res.status}`);
+        setRecordingFetching(false);
+        return;
+      }
+    } catch (err: any) {
+      setRecordingError(`Could not reach device: ${err?.message ?? 'network error'}`);
+      setRecordingFetching(false);
+      return;
+    }
+    setRecordingFetching(false);
 
     recordingStartFrameRef.current = frameCountRef.current;
     recordingStartTimeRef.current = Date.now();
@@ -460,6 +480,8 @@ export function useStreamSession() {
     setRecordingState('idle');
     setRecordingProgress(0);
     setRecordingResult(null);
+    setRecordingError(null);
+    setRecordingFetching(false);
   }, []);
 
   const fps = frameCount > 0
@@ -470,7 +492,7 @@ export function useStreamSession() {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
     bytesReceived, useWebViewMode, webViewStatus,
-    recordingState, recordingProgress, recordingResult,
+    recordingState, recordingProgress, recordingFetching, recordingError, recordingResult,
     start, stop, reset, submitWifiCredentials,
     enableWebView, handleWebViewFrame, handleWebViewStatus,
     startRecording, resetRecording,
