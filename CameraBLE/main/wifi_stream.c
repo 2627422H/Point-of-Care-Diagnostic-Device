@@ -318,6 +318,11 @@ static esp_err_t record_handler(httpd_req_t *req)
     camera_lock_exposure();
     rgb_led_fade_start(r, g, b, (rgb_led_curve_t)curve, duration_ms, step_ms);
 
+    /* Wait for the fade to get underway and for the camera to capture at least
+     * one faded frame before collecting samples.  This prevents the "stuck at
+     * 250 plateau" artefact seen at the very start of a recording. */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     /* Start brightness recording — capture loop calls wifi_stream_record_sample(). */
     s_rec_count    = 0;
     s_rec_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -472,6 +477,32 @@ static esp_err_t record_result_handler(httpd_req_t *req)
     return ret;
 }
 
+/* HTTP handler for GET /led?r=<0-255>&g=<0-255>&b=<0-255>
+ *
+ * Sets the RGB LED to a fixed colour immediately.  All three params default
+ * to 255 if omitted.  Returns JSON {"r":R,"g":G,"b":B}. */
+static esp_err_t led_handler(httpd_req_t *req)
+{
+    char query[64] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+
+    char p[16];
+    uint8_t r = 255, g = 255, b = 255;
+
+    if (httpd_query_key_value(query, "r", p, sizeof(p)) == ESP_OK) r = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "g", p, sizeof(p)) == ESP_OK) g = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "b", p, sizeof(p)) == ESP_OK) b = (uint8_t)atoi(p);
+
+    rgb_led_set(r, g, b);
+
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"r\":%d,\"g\":%d,\"b\":%d}", r, g, b);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_sendstr(req, resp);
+}
+
 esp_err_t wifi_stream_start(void)
 {
     /* Allocate the shared frame buffer. */
@@ -534,6 +565,13 @@ esp_err_t wifi_stream_start(void)
         .handler = record_result_handler,
     };
     httpd_register_uri_handler(s_httpd, &record_result_uri);
+
+    httpd_uri_t led_uri = {
+        .uri     = "/led",
+        .method  = HTTP_GET,
+        .handler = led_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &led_uri);
 
     ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;

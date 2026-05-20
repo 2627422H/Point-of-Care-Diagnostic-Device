@@ -6,36 +6,45 @@ import { Colors, Spacing, Radius, FontSize } from '../constants/theme';
 interface Props {
   data: { t: number; b: number }[];   // timestamped brightness samples
   durationMs: number;
+  compact?: boolean;
 }
 
 const MAX_POINTS = 60;
 const CHART_HEIGHT = 160;
 
-export default function BrightnessChart({ data, durationMs }: Props) {
+export default function BrightnessChart({ data, durationMs, compact = false }: Props) {
   if (data.length < 2) return null;
 
-  // Downsample evenly to at most MAX_POINTS, preserving timestamps
-  const step = Math.max(1, Math.floor(data.length / MAX_POINTS));
-  const sampled = data.filter((_, i) => i % step === 0);
+  // Normalize to % of the peak brightness (max of first 20% of samples).
+  // This makes curves comparable regardless of LED colour or camera exposure,
+  // and ensures the chart fills its height even when the raw range is narrow.
+  const baselineWindow = Math.max(1, Math.floor(data.length * 0.2));
+  const peak = Math.max(...data.slice(0, baselineWindow).map((d) => d.b), 1);
+  const normalised = data.map((d) => ({ t: d.t, b: Math.round((d.b / peak) * 100) }));
 
-  // Labels use actual sample timestamps, not assumed equal spacing
-  const labelEvery = Math.floor(sampled.length / 4);
+  // Downsample to at most MAX_POINTS
+  const step = Math.max(1, Math.floor(normalised.length / MAX_POINTS));
+  const sampled = normalised.filter((_, i) => i % step === 0);
+
+  // Labels at 0 %, 25 %, 50 %, 75 %, 100 % of sample count — use real timestamps
+  const labelEvery = Math.max(1, Math.floor(sampled.length / 4));
   const labels = sampled.map((pt, i) => {
-    if (i % labelEvery !== 0 && i !== sampled.length - 1) return '';
+    if (i === 0) return '0s';
+    if (i === sampled.length - 1) return `${(pt.t / 1000).toFixed(1)}s`;
+    if (i % labelEvery !== 0) return '';
     return `${(pt.t / 1000).toFixed(1)}s`;
   });
 
-  const chartWidth = Dimensions.get('window').width - Spacing.md * 4;
+  const chartWidth = Dimensions.get('window').width - Spacing.md * (compact ? 6 : 4);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Brightness curve</Text>
+      {!compact && <Text style={styles.title}>Brightness curve (% of peak)</Text>}
       <LineChart
         data={{ labels, datasets: [{ data: sampled.map((pt) => pt.b) }] }}
         width={chartWidth}
-        height={CHART_HEIGHT}
-        fromZero
-        yAxisSuffix=""
+        height={compact ? 100 : CHART_HEIGHT}
+        yAxisSuffix="%"
         yAxisLabel=""
         chartConfig={{
           backgroundGradientFrom: Colors.sectionBackground,
@@ -52,11 +61,6 @@ export default function BrightnessChart({ data, durationMs }: Props) {
         withOuterLines={false}
         style={styles.chart}
       />
-      <View style={styles.axisRow}>
-        <Text style={styles.axisLabel}>0</Text>
-        <Text style={styles.axisCenter}>Brightness (0–255)</Text>
-        <Text style={styles.axisLabel}>255</Text>
-      </View>
     </View>
   );
 }
@@ -79,20 +83,5 @@ const styles = StyleSheet.create({
   },
   chart: {
     marginLeft: -Spacing.sm,
-  },
-  axisRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.sm,
-    marginTop: -Spacing.xs,
-  },
-  axisLabel: {
-    fontSize: 10,
-    color: Colors.textMuted,
-  },
-  axisCenter: {
-    fontSize: 10,
-    color: Colors.textMuted,
-    textAlign: 'center',
   },
 });

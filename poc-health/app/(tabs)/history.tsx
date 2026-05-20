@@ -12,6 +12,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LineChart } from 'react-native-chart-kit';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
+import { useRecordingStore, deleteRecordingRun, CURVE_LABELS, type RecordingRun } from '../../store/useRecordingStore';
+import BrightnessChart from '../../components/BrightnessChart';
 import type { TestResult } from '../../types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -233,10 +235,46 @@ function ResultRow({
   );
 }
 
+// ── RecordingRunRow ───────────────────────────────────────────────────────────
+
+function RecordingRunRow({ run }: { run: RecordingRun }) {
+  const [expanded, setExpanded] = useState(false);
+  const date = new Date(run.timestamp).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+
+  return (
+    <TouchableOpacity style={styles.row} onPress={() => setExpanded((v) => !v)} activeOpacity={0.75}>
+      <View style={styles.rowMain}>
+        <View style={styles.rowLeft}>
+          <Text style={styles.rowDate}>{date}</Text>
+          <Text style={styles.rowCycleDay}>{CURVE_LABELS[run.curve]} · {(run.durationMs / 1000).toFixed(1)}s · {run.framesCapured} frames</Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => deleteRecordingRun(run.id)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ padding: 4 }}
+        >
+          <Ionicons name="trash-outline" size={16} color={Colors.textMuted} />
+        </TouchableOpacity>
+      </View>
+      {expanded && run.brightnessData.length >= 2 && (
+        <View style={{ marginTop: Spacing.xs }}>
+          <BrightnessChart data={run.brightnessData} durationMs={run.durationMs} compact />
+        </View>
+      )}
+      {expanded && run.brightnessData.length < 2 && (
+        <Text style={styles.rowCycleDay}>No brightness data available.</Text>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 // ── HistoryScreen ─────────────────────────────────────────────────────────────
 
 export default function HistoryScreen() {
   const { results } = useAppStore();
+  const { runs } = useRecordingStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const sorted = [...results].sort((a, b) => b.timestamp - a.timestamp);
@@ -301,6 +339,16 @@ export default function HistoryScreen() {
 
             <Text style={styles.sectionLabel}>ALL TESTS</Text>
           </View>
+        }
+        ListFooterComponent={
+          runs.length > 0 ? (
+            <View style={styles.listHeader}>
+              <Text style={styles.sectionLabel}>RECORDING RUNS</Text>
+              {runs.map((run) => (
+                <RecordingRunRow key={run.id} run={run} />
+              ))}
+            </View>
+          ) : null
         }
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={

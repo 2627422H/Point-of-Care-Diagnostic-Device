@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { saveRecordingRun } from '../store/useRecordingStore';
 import { Platform, PermissionsAndroid } from 'react-native';
 
 export type StreamPhase =
@@ -434,13 +435,15 @@ export function useStreamSession() {
     setRecordingFetching(true);
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
       let res: Response;
       try {
         res = await fetch(url, { signal: controller.signal });
         clearTimeout(timeout);
       } catch (err: any) {
         clearTimeout(timeout);
+        if (timedOut) throw new Error(`No response from device after 15 s — is it reachable at ${base}?`);
         throw err;
       }
       if (!res.ok) {
@@ -449,7 +452,7 @@ export function useStreamSession() {
         return;
       }
     } catch (err: any) {
-      setRecordingError(`Could not reach device: ${err?.message ?? 'network error'}`);
+      setRecordingError(err?.message ?? 'Network error — check device IP');
       setRecordingFetching(false);
       return;
     }
@@ -492,14 +495,17 @@ export function useStreamSession() {
                 });
               }
               setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData });
+              saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData });
               setRecordingState('done');
             })
             .catch(() => {
               setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
+              saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData: [] });
               setRecordingState('done');
             });
         } else {
           setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
+          saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData: [] });
           setRecordingState('done');
         }
       }

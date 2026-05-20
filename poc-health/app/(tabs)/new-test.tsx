@@ -16,9 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Device from 'expo-device';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
-import MjpegViewer from '../../components/MjpegViewer';
-import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 import BrightnessChart from '../../components/BrightnessChart';
+import LedColorPicker from '../../components/LedColorPicker';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
 
@@ -61,9 +60,6 @@ export default function NewTestScreen() {
     streamError,
     connectStatus,
     bleMode,
-    bytesReceived,
-    setBytesReceived,
-    useWebViewMode,
     webViewStatus,
     recordingState,
     recordingProgress,
@@ -74,9 +70,7 @@ export default function NewTestScreen() {
     stop,
     reset,
     submitWifiCredentials,
-    enableWebView,
     handleWebViewFrame,
-    handleWebViewStatus,
     startRecording,
     resetRecording,
   } = useStreamSession();
@@ -101,6 +95,9 @@ export default function NewTestScreen() {
   const [showManualIp,  setShowManualIp]  = useState(false);
   const [manualIp,      setManualIp]      = useState('');
   const [activeStreamUrl, setActiveStreamUrl] = useState<string | null>(null);
+
+  const [showDebug,  setShowDebug]  = useState(false);
+  const [ledStatus,  setLedStatus]  = useState<string | null>(null);
 
   /* The URL we actually show — prefer manually entered over hook-provided. */
   const displayUrl = activeStreamUrl ?? streamUrl;
@@ -135,6 +132,19 @@ export default function NewTestScreen() {
     const url = ip.startsWith('http') ? ip : `http://${ip}/stream`;
     setActiveStreamUrl(url);
     setShowManualIp(false);
+  }
+
+  async function handleSetLed(r: number, g: number, b: number) {
+    const base = (displayUrl ?? '').replace('/stream', '').replace(/\/$/, '');
+    if (!base) return;
+    setLedStatus('Sending…');
+    try {
+      const res = await fetch(`${base}/led?r=${r}&g=${g}&b=${b}`);
+      if (res.ok) setLedStatus(`Set (${r}, ${g}, ${b})`);
+      else setLedStatus(`Error HTTP ${res.status}`);
+    } catch (e: any) {
+      setLedStatus(`Error: ${e?.message ?? 'network error'}`);
+    }
   }
 
   return (
@@ -191,33 +201,6 @@ export default function NewTestScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* ── LIVE STREAM VIEWER ── */}
-          {(isStreaming || displayUrl) && displayUrl ? (
-            <View style={styles.streamCard}>
-              <Text style={styles.streamCardTitle}>LIVE STREAM</Text>
-              <MjpegViewer
-                streamUrl={displayUrl}
-                onFrame={handleWebViewFrame}
-                onError={(msg) => handleWebViewStatus('error: ' + msg)}
-                onStatus={handleWebViewStatus}
-                onBytes={setBytesReceived}
-              />
-              <View style={styles.streamStats}>
-                <Text style={styles.streamStat}>
-                  <Text style={styles.streamStatLabel}>Frames: </Text>
-                  {frameCount}
-                </Text>
-                <Text style={styles.streamStat}>
-                  <Text style={styles.streamStatLabel}>FPS: </Text>
-                  {fps}
-                </Text>
-                <Text style={styles.streamStat} numberOfLines={1}>
-                  <Text style={styles.streamStatLabel}>Viewer: </Text>
-                  {displayUrl?.replace('/stream', '/')}
-                </Text>
-              </View>
-            </View>
-          ) : null}
 
           {/* ── RECORDING PANEL ── */}
           {isStreaming && displayUrl && (
@@ -470,34 +453,53 @@ export default function NewTestScreen() {
             </View>
           )}
 
-          {/* Debug panel — hidden WebView analyzer still runs for frame counting
-              when MjpegViewer is visible. Only show analyzer in non-viewer mode. */}
-          {isStreaming && displayUrl && useWebViewMode && (
-            <MjpegAnalyzer
-              streamUrl={displayUrl}
-              onFrame={handleWebViewFrame}
-              onError={(msg) => handleWebViewStatus('error: ' + msg)}
-              onStatus={handleWebViewStatus}
-            />
-          )}
-
-          {/* Debug info */}
-          {isStreaming && (
+          {/* ── DEBUG + LED PANEL ── */}
+          {isStreaming && displayUrl && (
             <View style={styles.debugCard}>
-              <Text style={styles.debugTitle}>DEBUG</Text>
-              {[
-                ['Mode',     bleMode ? 'BLE (real)' : 'Mock'],
-                ['HTTP',     connectStatus ?? 'connecting…'],
-                ['Bytes Rx', bytesReceived > 0 ? `${(bytesReceived / 1024).toFixed(1)} KB` : '0'],
-                ['Stream',   displayUrl ?? 'not received'],
-                ...(streamError ? [['Error', streamError]] : []),
-                ...(webViewStatus ? [['WebView', webViewStatus]] : []),
-              ].map(([label, value]) => (
-                <View key={label} style={styles.debugRow}>
-                  <Text style={styles.debugLabel}>{label}</Text>
-                  <Text style={styles.debugValue} numberOfLines={2}>{value}</Text>
-                </View>
-              ))}
+              <TouchableOpacity
+                style={styles.debugHeader}
+                onPress={() => setShowDebug((v) => !v)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.debugTitle}>DEBUG</Text>
+                <Ionicons
+                  name={showDebug ? 'chevron-up' : 'chevron-down'}
+                  size={16}
+                  color={Colors.textSecondary}
+                />
+              </TouchableOpacity>
+
+              {showDebug && (
+                <>
+                  {/* Connection info */}
+                  {[
+                    ['Mode',   bleMode ? 'BLE (real)' : 'Mock'],
+                    ['HTTP',   connectStatus ?? 'connecting…'],
+                    ['Stream', displayUrl],
+                    ...(streamError   ? [['Error',   streamError]]   : []),
+                    ...(webViewStatus ? [['Status',  webViewStatus]] : []),
+                  ].map(([label, value]) => (
+                    <View key={label} style={styles.debugRow}>
+                      <Text style={styles.debugLabel}>{label}</Text>
+                      <Text style={styles.debugValue} numberOfLines={2}>{value}</Text>
+                    </View>
+                  ))}
+
+                  {/* Stream link */}
+                  <TouchableOpacity
+                    style={styles.streamLinkBtn}
+                    onPress={() => Linking.openURL(displayUrl.replace('/stream', '/stream'))}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="open-outline" size={14} color={Colors.primary} />
+                    <Text style={styles.streamLinkText}>Open stream in browser</Text>
+                  </TouchableOpacity>
+
+                  {/* RGB LED control */}
+                  <Text style={styles.debugSectionLabel}>LED COLOUR</Text>
+                  <LedColorPicker onColor={handleSetLed} status={ledStatus} />
+                </>
+              )}
             </View>
           )}
 
@@ -578,27 +580,6 @@ const styles = StyleSheet.create({
   actionButtonStop:     { backgroundColor: Colors.primaryDark },
   actionLabel: { fontSize: FontSize.sm, fontWeight: '900', color: '#fff', letterSpacing: 1 },
 
-  streamCard: {
-    backgroundColor: Colors.cardBackground,
-    borderRadius: Radius.lg,
-    overflow: 'hidden',
-    gap: Spacing.sm,
-    padding: Spacing.sm,
-  },
-  streamCardTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: Colors.textSecondary,
-    letterSpacing: 1,
-    paddingHorizontal: Spacing.xs,
-  },
-  streamStats: {
-    paddingHorizontal: Spacing.xs,
-    gap: 2,
-  },
-  streamStat: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  streamStatLabel: { fontWeight: '600', color: Colors.text },
-
   manualIpToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -644,16 +625,34 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     gap: Spacing.sm,
   },
+  debugHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   debugTitle: {
     fontSize: FontSize.xs,
     fontWeight: '700',
     color: Colors.textSecondary,
     letterSpacing: 1,
-    marginBottom: 2,
   },
   debugRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
   debugLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, width: 80 },
   debugValue: { flex: 1, fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
+  debugSectionLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+    marginTop: Spacing.xs,
+  },
+  streamLinkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  streamLinkText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
 
   errorCard: {
     backgroundColor: Colors.cardBackground,
