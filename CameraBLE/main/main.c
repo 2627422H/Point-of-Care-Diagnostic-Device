@@ -18,7 +18,7 @@ static const char *TAG = "cam_main";
 #define CAM_H_RES       800
 #define CAM_V_RES       640
 #define JPEG_OUT_BUF_KB 800
-#define JPEG_QUALITY    85
+#define JPEG_QUALITY    40
 #define TARGET_FRAME_MS 50
 
 /*

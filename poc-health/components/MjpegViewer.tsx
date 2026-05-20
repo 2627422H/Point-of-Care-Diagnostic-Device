@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { StyleSheet, View, Image } from 'react-native';
 
 interface Props {
@@ -9,32 +9,32 @@ interface Props {
   onBytes?: (total: number) => void;
 }
 
-// Polls /snapshot every 100 ms (10 fps).
-// React Native's native Image loader fetches plain JPEG over HTTP with no
-// CORS or ATS issues — no WebView, no streaming parser needed.
+// Snapshot polling: fetches /snapshot each time the previous image finishes
+// loading. This naturally rate-limits to the device's actual throughput —
+// if a frame takes 300 ms over WiFi, we don't queue up a backlog of requests.
 // streamUrl is e.g. http://192.168.x.x/stream; we replace /stream → /snapshot.
 export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus, onBytes }: Props) {
   const [tick, setTick] = useState(0);
   const [reachable, setReachable] = useState(false);
   const liveRef = useRef(true);
+  const loadingRef = useRef(false);   // true while a fetch is in flight
   const totalBytesRef = useRef(0);
   const snapshotBase = streamUrl.replace('/stream', '/snapshot');
 
   useEffect(() => {
     liveRef.current = true;
+    loadingRef.current = false;
     totalBytesRef.current = 0;
     setReachable(false);
     setTick(0);
 
     onStatus?.('Connecting…');
 
-    // Probe once to confirm the device is reachable before starting the poll loop.
     const ctrl = new AbortController();
     fetch(`${snapshotBase}?t=probe`, { signal: ctrl.signal })
       .then((res) => {
         if (!liveRef.current) return;
         if (!res.ok) { onError?.(`Device returned HTTP ${res.status}`); return; }
-        // Rough byte count from Content-Length header if present.
         const cl = res.headers.get('content-length');
         if (cl) { totalBytesRef.current += parseInt(cl, 10); onBytes?.(totalBytesRef.current); }
         onStatus?.('Stream connected');
@@ -52,18 +52,28 @@ export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus, onB
     };
   }, [streamUrl]);
 
-  // Tick loop — only runs once reachable is confirmed.
+  // Called when the Image finishes loading — immediately request the next frame.
+  const handleLoad = useCallback(() => {
+    loadingRef.current = false;
+    onFrame?.(128);
+    if (liveRef.current) setTick((t) => t + 1);
+  }, [onFrame]);
+
+  // Called when the Image fails — wait 200 ms then retry.
+  const handleError = useCallback((e: any) => {
+    loadingRef.current = false;
+    onError?.(e.nativeEvent?.error ?? 'image load error');
+    if (liveRef.current) setTimeout(() => { if (liveRef.current) setTick((t) => t + 1); }, 200);
+  }, [onError]);
+
+  // Kick off the very first load once reachable.
   useEffect(() => {
     if (!reachable) return;
-    const id = setInterval(() => {
-      if (!liveRef.current) return;
-      setTick((t) => t + 1);
-      onFrame?.(128);
-    }, 100);
-    return () => clearInterval(id);
+    loadingRef.current = true;
+    setTick(1);
   }, [reachable]);
 
-  const uri = reachable ? `${snapshotBase}?t=${tick}` : null;
+  const uri = reachable && tick > 0 ? `${snapshotBase}?t=${tick}` : null;
 
   return (
     <View style={styles.container}>
@@ -73,7 +83,8 @@ export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus, onB
           style={styles.image}
           resizeMode="contain"
           fadeDuration={0}
-          onError={(e) => onError?.(e.nativeEvent.error)}
+          onLoad={handleLoad}
+          onError={handleError}
         />
       )}
     </View>
