@@ -45,6 +45,15 @@ static void stop_animations(void)
     if (had) vTaskDelay(pdMS_TO_TICKS(50));
 }
 
+/* Non-blocking: clear animation flags and immediately override LED via rgb_led_set().
+ * The animation task will exit on its next step; LEDC duty is already overwritten. */
+void rgb_led_stop_all(void)
+{
+    s_rainbow_active = false;
+    s_fade_active    = false;
+    s_pulse_active   = false;
+}
+
 esp_err_t rgb_led_init(void)
 {
     ledc_timer_config_t timer_cfg = {

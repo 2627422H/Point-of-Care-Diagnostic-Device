@@ -247,7 +247,7 @@ esp_err_t camera_init(void)
      * without this the output is greyscale.
      */
     esp_isp_demosaic_config_t demosaic_cfg = {
-        .grad_ratio = { .integer = 2, .decimal = 5 },
+        .grad_ratio = { .integer = 0, .decimal = 0 },
     };
     ret = esp_isp_demosaic_configure(s_isp_proc, &demosaic_cfg);
     if (ret != ESP_OK) {
@@ -266,7 +266,7 @@ esp_err_t camera_init(void)
      */
     esp_isp_color_config_t color_cfg = {
         .color_contrast   = { .val = 128 },
-        .color_saturation = { .val = 150 },
+        .color_saturation = { .val = 128 },
         .color_hue        = 0,
         .color_brightness = 20,             /* lift shadows */
     };

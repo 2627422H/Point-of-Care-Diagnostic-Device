@@ -66,6 +66,9 @@ void rgb_led_pulse_start(uint8_t r, uint8_t g, uint8_t b, uint32_t period_ms);
 /** Stop an in-progress pulse. LED turns off. */
 void rgb_led_pulse_stop(void);
 
+/** Stop all animations immediately (non-blocking) — call before rgb_led_set() from HTTP handlers. */
+void rgb_led_stop_all(void);
+
 /** Solid colour shortcuts - each one stops any active rainbow or fade. */
 void rgb_led_off(void);
 void rgb_led_red(void);
