@@ -308,7 +308,7 @@ static esp_err_t snapshot_handler(httpd_req_t *req)
 
     if (len == 0) {
         free(local);
-        httpd_resp_send_err(req, HTTPD_503_SERVICE_UNAVAILABLE, "No frame yet");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No frame yet");
         return ESP_FAIL;
     }
 
