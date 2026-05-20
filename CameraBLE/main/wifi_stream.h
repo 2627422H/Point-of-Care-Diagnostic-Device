@@ -37,6 +37,16 @@ esp_err_t wifi_stream_start(void);
  */
 esp_err_t wifi_stream_push_frame(const uint8_t *data, size_t len);
 
+/**
+ * Sample brightness from a raw RGB565 frame and record it if a recording
+ * session is currently active.  Call this from the capture loop with the
+ * raw frame buffer BEFORE JPEG encoding.
+ *
+ * @param rgb565  Raw RGB565 frame buffer.
+ * @param len     Buffer length in bytes (width * height * 2).
+ */
+void wifi_stream_record_sample(const uint8_t *rgb565, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

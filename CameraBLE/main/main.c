@@ -121,6 +121,9 @@ void app_main(void)
             continue;
         }
 
+        /* Sample brightness from raw pixels for any active recording session. */
+        wifi_stream_record_sample(frame_buf, frame_size);
+
         jpeg_encode_cfg_t enc_cfg = {
             .src_type      = JPEG_ENCODE_IN_FORMAT_RGB565,
             .sub_sample    = JPEG_DOWN_SAMPLING_YUV422,

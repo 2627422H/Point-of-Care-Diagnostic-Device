@@ -4,7 +4,7 @@ import { LineChart } from 'react-native-chart-kit';
 import { Colors, Spacing, Radius, FontSize } from '../constants/theme';
 
 interface Props {
-  data: number[];       // raw brightness values 0–255 per frame
+  data: { t: number; b: number }[];   // timestamped brightness samples
   durationMs: number;
 }
 
@@ -14,16 +14,15 @@ const CHART_HEIGHT = 160;
 export default function BrightnessChart({ data, durationMs }: Props) {
   if (data.length < 2) return null;
 
-  // Downsample evenly to at most MAX_POINTS
+  // Downsample evenly to at most MAX_POINTS, preserving timestamps
   const step = Math.max(1, Math.floor(data.length / MAX_POINTS));
   const sampled = data.filter((_, i) => i % step === 0);
 
-  // Sparse labels: show time at 0 %, 25 %, 50 %, 75 %, 100 %
+  // Labels use actual sample timestamps, not assumed equal spacing
   const labelEvery = Math.floor(sampled.length / 4);
-  const labels = sampled.map((_, i) => {
+  const labels = sampled.map((pt, i) => {
     if (i % labelEvery !== 0 && i !== sampled.length - 1) return '';
-    const t = (i / (sampled.length - 1)) * (durationMs / 1000);
-    return `${t.toFixed(0)}s`;
+    return `${(pt.t / 1000).toFixed(1)}s`;
   });
 
   const chartWidth = Dimensions.get('window').width - Spacing.md * 4;
@@ -32,7 +31,7 @@ export default function BrightnessChart({ data, durationMs }: Props) {
     <View style={styles.container}>
       <Text style={styles.title}>Brightness curve</Text>
       <LineChart
-        data={{ labels, datasets: [{ data: sampled }] }}
+        data={{ labels, datasets: [{ data: sampled.map((pt) => pt.b) }] }}
         width={chartWidth}
         height={CHART_HEIGHT}
         fromZero

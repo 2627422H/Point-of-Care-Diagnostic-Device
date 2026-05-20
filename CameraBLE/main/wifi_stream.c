@@ -10,6 +10,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -145,6 +146,56 @@ static uint32_t          s_frame_seq   = 0;   /* incremented each push */
 
 static httpd_handle_t    s_httpd       = NULL;
 
+/* ── Recording session ────────────────────────────────────────────────────── */
+#define MAX_RECORD_FRAMES  600   /* 60 s at 10 fps */
+
+static volatile bool s_rec_active  = false;
+static uint32_t      s_rec_start_ms = 0;
+static uint16_t      s_rec_brightness[MAX_RECORD_FRAMES];
+static uint32_t      s_rec_timestamps[MAX_RECORD_FRAMES];
+static int           s_rec_count   = 0;
+
+/* Sample ~1024 evenly-spaced pixels from a raw RGB565 frame and return mean
+ * luma (0–255).  Called from the capture task — must be fast. */
+static uint8_t brightness_from_rgb565(const uint8_t *buf, size_t len)
+{
+    size_t n_pixels = len / 2;
+    size_t step = n_pixels / 1024;
+    if (step < 1) step = 1;
+
+    uint32_t sum   = 0;
+    uint32_t count = 0;
+    for (size_t i = 0; i < n_pixels; i += step) {
+        /* RGB565 big-endian: RRRRRGGG GGGBBBBB */
+        uint16_t px = ((uint16_t)buf[i * 2] << 8) | buf[i * 2 + 1];
+        uint32_t r  = (px >> 11) & 0x1F;   /* 0-31 */
+        uint32_t g  = (px >>  5) & 0x3F;   /* 0-63 */
+        uint32_t b  =  px        & 0x1F;   /* 0-31 */
+        /* Scale to 8-bit and apply BT.601 luma weights */
+        sum += (r * 8 * 299 + g * 4 * 587 + b * 8 * 114) / 1000;
+        count++;
+    }
+    return count > 0 ? (uint8_t)(sum / count) : 0;
+}
+
+void wifi_stream_record_sample(const uint8_t *rgb565, size_t len)
+{
+    if (!s_rec_active || s_rec_count >= MAX_RECORD_FRAMES) return;
+    uint32_t ts = (uint32_t)(esp_timer_get_time() / 1000) - s_rec_start_ms;
+    s_rec_timestamps[s_rec_count] = ts;
+    s_rec_brightness[s_rec_count] = brightness_from_rgb565(rgb565, len);
+    s_rec_count++;
+}
+
+static void rec_stop_task(void *arg)
+{
+    uint32_t delay_ms = *(uint32_t *)arg;
+    free(arg);
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    s_rec_active = false;
+    vTaskDelete(NULL);
+}
+
 esp_err_t wifi_stream_push_frame(const uint8_t *data, size_t len)
 {
     if (!s_frame_buf || !s_frame_mutex) {
@@ -267,7 +318,17 @@ static esp_err_t record_handler(httpd_req_t *req)
     camera_lock_exposure();
     rgb_led_fade_start(r, g, b, (rgb_led_curve_t)curve, duration_ms, step_ms);
 
-    /* Spawn a one-shot task to re-enable auto-exposure after the fade ends. */
+    /* Start brightness recording — capture loop calls wifi_stream_record_sample(). */
+    s_rec_count    = 0;
+    s_rec_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_rec_active   = true;
+
+    /* Spawn one-shot tasks: stop recording and unlock AE after fade ends. */
+    uint32_t *stop_ms = malloc(sizeof(uint32_t));
+    if (stop_ms) {
+        *stop_ms = duration_ms + 200;
+        xTaskCreate(rec_stop_task, "rec_stop", 2048, stop_ms, 3, NULL);
+    }
     uint32_t *unlock_ms = malloc(sizeof(uint32_t));
     if (unlock_ms) {
         *unlock_ms = duration_ms + 500;
@@ -373,6 +434,44 @@ static esp_err_t index_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, html);
 }
 
+/* HTTP handler for GET /record_result – returns brightness samples as JSON.
+ * {"active":false,"count":150,"samples":"0,245;100,240;..."}
+ * If recording is still in progress returns {"active":true,"count":0}. */
+static esp_err_t record_result_handler(httpd_req_t *req)
+{
+    if (s_rec_active) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        return httpd_resp_sendstr(req, "{\"active\":true,\"count\":0}");
+    }
+
+    int count = s_rec_count;
+
+    /* Each entry is at most "4294967295,255;" = 16 chars. */
+    size_t buf_size = (size_t)count * 16 + 64;
+    char *buf = malloc(buf_size);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    int pos = snprintf(buf, buf_size, "{\"active\":false,\"count\":%d,\"samples\":\"", count);
+    for (int i = 0; i < count; i++) {
+        pos += snprintf(buf + pos, buf_size - (size_t)pos,
+                        "%lu,%u%s",
+                        (unsigned long)s_rec_timestamps[i],
+                        (unsigned)s_rec_brightness[i],
+                        i < count - 1 ? ";" : "");
+    }
+    pos += snprintf(buf + pos, buf_size - (size_t)pos, "\"}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t ret = httpd_resp_sendstr(req, buf);
+    free(buf);
+    return ret;
+}
+
 esp_err_t wifi_stream_start(void)
 {
     /* Allocate the shared frame buffer. */
@@ -392,7 +491,7 @@ esp_err_t wifi_stream_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port      = 80;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 10;
     /* Allow the stream handler to block in the URI handler task. */
     config.stack_size       = 16384;
     config.lru_purge_enable = true;
@@ -429,6 +528,13 @@ esp_err_t wifi_stream_start(void)
     };
     httpd_register_uri_handler(s_httpd, &snapshot_uri);
 
-    ESP_LOGI(TAG, "HTTP server started. Stream at http://<ip>/stream  Snapshot at http://<ip>/snapshot");
+    httpd_uri_t record_result_uri = {
+        .uri     = "/record_result",
+        .method  = HTTP_GET,
+        .handler = record_result_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &record_result_uri);
+
+    ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;
 }

@@ -261,7 +261,10 @@ export function useStreamSession() {
     frameCountRef.current += 1;
     setFrameCount(frameCountRef.current);
     if (recordingActiveRef.current) {
-      brightnessRef.current.push(brightness);
+      brightnessRef.current.push({
+        t: Date.now() - recordingStartTimeRef.current,
+        b: brightness,
+      });
     }
   }, []);
 
@@ -399,13 +402,13 @@ export function useStreamSession() {
     durationMs: number;
     framesCapured: number;
     durationActualMs: number;
-    brightnessData: number[];
+    brightnessData: { t: number; b: number }[];
   } | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingStartFrameRef = useRef(0);
   const recordingStartTimeRef = useRef(0);
   const recordingActiveRef = useRef(false);
-  const brightnessRef = useRef<number[]>([]);
+  const brightnessRef = useRef<{ t: number; b: number }[]>([]);
 
   const startRecording = useCallback(async (params: {
     curve: 0 | 1 | 2 | 3;
@@ -469,14 +472,36 @@ export function useStreamSession() {
         clearInterval(recordingTimerRef.current!);
         recordingTimerRef.current = null;
         recordingActiveRef.current = false;
-        setRecordingResult({
-          curve,
-          durationMs: duration,
-          framesCapured: frameCountRef.current - recordingStartFrameRef.current,
-          durationActualMs: Date.now() - start,
-          brightnessData: [...brightnessRef.current],
-        });
-        setRecordingState('done');
+
+        const framesCapured = frameCountRef.current - recordingStartFrameRef.current;
+        const durationActualMs = Date.now() - start;
+
+        // Fetch device-measured brightness data (raw pixels, accurate timestamps).
+        const resultBase = (params.displayUrl ?? streamUrl ?? '')
+          .replace('/stream', '').replace(/\/$/, '');
+
+        if (resultBase) {
+          fetch(`${resultBase}/record_result`)
+            .then((r) => r.json())
+            .then((json: { active: boolean; count: number; samples: string }) => {
+              let brightnessData: { t: number; b: number }[] = [];
+              if (!json.active && json.count > 0 && json.samples) {
+                brightnessData = json.samples.split(';').map((s) => {
+                  const [t, b] = s.split(',').map(Number);
+                  return { t, b };
+                });
+              }
+              setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData });
+              setRecordingState('done');
+            })
+            .catch(() => {
+              setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
+              setRecordingState('done');
+            });
+        } else {
+          setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
+          setRecordingState('done');
+        }
       }
     }, 100);
   }, [streamUrl]);
