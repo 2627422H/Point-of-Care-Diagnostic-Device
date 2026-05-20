@@ -247,7 +247,7 @@ esp_err_t camera_init(void)
      * without this the output is greyscale.
      */
     esp_isp_demosaic_config_t demosaic_cfg = {
-        .grad_ratio = { .integer = 2, .decimal = 5 },
+        .grad_ratio = { .integer = 0, .decimal = 0 },
     };
     ret = esp_isp_demosaic_configure(s_isp_proc, &demosaic_cfg);
     if (ret != ESP_OK) {
@@ -266,7 +266,7 @@ esp_err_t camera_init(void)
      */
     esp_isp_color_config_t color_cfg = {
         .color_contrast   = { .val = 128 },
-        .color_saturation = { .val = 150 },
+        .color_saturation = { .val = 128 },
         .color_hue        = 0,
         .color_brightness = 20,             /* lift shadows */
     };
@@ -294,7 +294,7 @@ esp_err_t camera_init(void)
         .input_data_color_type  = CAM_CTLR_COLOR_RAW8,
         .output_data_color_type = CAM_CTLR_COLOR_RGB565,
         .data_lane_num          = 2,
-        .byte_swap_en           = false,
+        .byte_swap_en           = true,
         .queue_items            = 1,
     };
     ret = esp_cam_new_csi_ctlr(&csi_cfg, &s_cam_handle);

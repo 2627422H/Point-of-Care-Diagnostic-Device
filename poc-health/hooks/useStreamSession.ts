@@ -484,31 +484,35 @@ export function useStreamSession() {
         const resultBase = (params.displayUrl ?? streamUrl ?? '')
           .replace('/stream', '').replace(/\/$/, '');
 
-        if (resultBase) {
-          fetch(`${resultBase}/record_result`)
-            .then((r) => r.json())
-            .then((json: { active: boolean; count: number; samples: string }) => {
-              let brightnessData: { t: number; b: number }[] = [];
-              if (!json.active && json.count > 0 && json.samples) {
-                brightnessData = json.samples.split(';').map((s) => {
-                  const [t, b] = s.split(',').map(Number);
-                  return { t, b };
-                });
-              }
-              const { estimatedEstrogen } = fitDecay(brightnessData);
-              setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData });
-              saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData, estimatedEstrogen });
-              setRecordingState('done');
-            })
-            .catch(() => {
-              setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
-              saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData: [] });
-              setRecordingState('done');
-            });
-        } else {
-          setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
-          saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData: [] });
+        const finish = (brightnessData: { t: number; b: number }[]) => {
+          const trimmed = brightnessData.filter((d) => d.t <= duration + 100);
+          const { estimatedEstrogen } = fitDecay(trimmed);
+          setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: trimmed });
+          saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData: trimmed, estimatedEstrogen });
           setRecordingState('done');
+        };
+
+        if (resultBase) {
+          const pollResult = async () => {
+            await new Promise<void>((r) => setTimeout(r, 500));
+            for (let attempt = 0; attempt < 5; attempt++) {
+              try {
+                const r = await fetch(`${resultBase}/record_result`);
+                const json: { active: boolean; count: number; samples: string } = await r.json();
+                if (!json.active && json.count > 0 && json.samples) {
+                  return json.samples.split(';').map((s) => {
+                    const [t, b] = s.split(',').map(Number);
+                    return { t, b };
+                  });
+                }
+              } catch {}
+              await new Promise<void>((r) => setTimeout(r, 300));
+            }
+            return [];
+          };
+          pollResult().then(finish).catch(() => finish([]));
+        } else {
+          finish([]);
         }
       }
     }, 100);

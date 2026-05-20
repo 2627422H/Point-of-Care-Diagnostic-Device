@@ -80,7 +80,7 @@ export default function NewTestScreen() {
   const [password,       setPassword]       = useState('');
   const [showPassword,   setShowPassword]   = useState(false);
   const [selectedCurve,  setSelectedCurve]  = useState<0|1|2|3>(1);
-  const [duration,       setDuration]       = useState('10000');
+  const [duration,       setDuration]       = useState('5000');
 
   function handleUseHotspot() {
     const name = Device.deviceName ?? '';
@@ -136,17 +136,13 @@ export default function NewTestScreen() {
     setShowManualIp(false);
   }
 
-  async function handleSetLed(r: number, g: number, b: number) {
+  function handleSetLed(r: number, g: number, b: number) {
     const base = (displayUrl ?? '').replace('/stream', '').replace(/\/$/, '');
     if (!base) return;
-    setLedStatus('Sending…');
-    try {
-      const res = await fetch(`${base}/led?r=${r}&g=${g}&b=${b}`);
-      if (res.ok) setLedStatus(`Set (${r}, ${g}, ${b})`);
-      else setLedStatus(`Error HTTP ${res.status}`);
-    } catch (e: any) {
-      setLedStatus(`Error: ${e?.message ?? 'network error'}`);
-    }
+    setLedStatus(`(${r}, ${g}, ${b})`);
+    fetch(`${base}/led?r=${r}&g=${g}&b=${b}`)
+      .then((res) => { if (!res.ok) setLedStatus(`Error HTTP ${res.status}`); })
+      .catch((e: any) => setLedStatus(`Error: ${e?.message ?? 'network error'}`));
   }
 
   return (

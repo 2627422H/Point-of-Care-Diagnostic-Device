@@ -18,8 +18,9 @@ static const char *TAG = "cam_main";
 #define CAM_H_RES       800
 #define CAM_V_RES       640
 #define JPEG_OUT_BUF_KB 800
-#define JPEG_QUALITY    85
-#define TARGET_FRAME_MS 50
+#define JPEG_QUALITY    60
+#define TARGET_FRAME_MS  50
+#define STREAM_EVERY_N   20   /* push MJPEG ~1 fps (capture still runs at 20 fps for brightness) */
 
 /*
  * LED status scheme:
@@ -141,15 +142,13 @@ void app_main(void)
             continue;
         }
 
-        ret = wifi_stream_push_frame(jpeg_buf, jpeg_out_size);
-        if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Frame %lu: %lu bytes",
-                     (unsigned long)frame_id, (unsigned long)jpeg_out_size);
-        } else {
-            ESP_LOGW(TAG, "Stream push failed: %s", esp_err_to_name(ret));
-        }
-
         frame_id++;
+        if (frame_id % STREAM_EVERY_N == 0) {
+            ret = wifi_stream_push_frame(jpeg_buf, jpeg_out_size);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Stream push failed: %s", esp_err_to_name(ret));
+            }
+        }
     }
 
     jpeg_del_encoder_engine(jpeg_enc);

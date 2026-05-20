@@ -193,6 +193,7 @@ static void rec_stop_task(void *arg)
     free(arg);
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
     s_rec_active = false;
+    rgb_led_green();   /* restore streaming indicator after fade ends */
     vTaskDelete(NULL);
 }
 
@@ -331,7 +332,7 @@ static esp_err_t record_handler(httpd_req_t *req)
     /* Spawn one-shot tasks: stop recording and unlock AE after fade ends. */
     uint32_t *stop_ms = malloc(sizeof(uint32_t));
     if (stop_ms) {
-        *stop_ms = duration_ms + 200;
+        *stop_ms = duration_ms;
         xTaskCreate(rec_stop_task, "rec_stop", 2048, stop_ms, 3, NULL);
     }
     uint32_t *unlock_ms = malloc(sizeof(uint32_t));
@@ -493,6 +494,7 @@ static esp_err_t led_handler(httpd_req_t *req)
     if (httpd_query_key_value(query, "g", p, sizeof(p)) == ESP_OK) g = (uint8_t)atoi(p);
     if (httpd_query_key_value(query, "b", p, sizeof(p)) == ESP_OK) b = (uint8_t)atoi(p);
 
+    rgb_led_stop_all();
     rgb_led_set(r, g, b);
 
     char resp[48];
