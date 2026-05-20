@@ -58,7 +58,7 @@ const makeHtml = (url: string) => `<!DOCTYPE html><html>
   </style>
 </head>
 <body>
-  <img id="stream" src="${url}" crossorigin="anonymous">
+  <img id="stream" src="${url}">
   <canvas id="canvas" width="8" height="8" style="display:none"></canvas>
   <div id="status">Connecting…</div>
   <div id="error"></div>
@@ -110,6 +110,11 @@ img.onerror = function() {
 </body></html>`;
 
 export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: Props) {
+  /* Derive the base URL (e.g. http://172.20.10.13) from the stream URL.
+   * Passing it as baseUrl gives the WebView the same origin as the ESP32,
+   * so the <img> request is same-origin and CORS is never involved. */
+  const baseUrl = streamUrl.replace(/\/[^/]*$/, '');
+
   function handleMessage(event: { nativeEvent: { data: string } }) {
     const data = event.nativeEvent.data;
     if (data === 'frame') {
@@ -130,7 +135,7 @@ export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: P
   return (
     <View style={styles.container}>
       <WebView
-        source={{ html: makeHtml(streamUrl) }}
+        source={{ html: makeHtml(streamUrl), baseUrl }}
         style={styles.webview}
         onMessage={handleMessage}
         originWhitelist={['*']}
