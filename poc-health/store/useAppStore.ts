@@ -1,18 +1,155 @@
 import { useState, useCallback } from 'react';
 import type { TestResult, DeviceInfo, ConnectionState, TestStatus } from '../types';
 
-// Seed data mirroring the POC design (30-day cycle, estrogen peaks around D17)
+const DAY = 24 * 60 * 60 * 1000;
+
+// Seed data mirroring the POC design (30-day cycle, estrogen peaks around D14–D17)
 const SEED_HISTORY: TestResult[] = [
+  // ── Current cycle ──────────────────────────────────────────────────────
   {
     id: '1',
-    timestamp: Date.now() - 3 * 24 * 60 * 60 * 1000,
-    estrogenLevel: 400,
-    cycleDay: 17,
+    timestamp: Date.now() - 2 * DAY,
+    estrogenLevel: 465,
+    cycleDay: 14,
     symptoms: [
-      { id: 's1', name: 'Cramping', icon: 'pulse', severity: 'Mild', value: 0.25 },
-      { id: 's2', name: 'Bloating', icon: 'water', severity: 'Moderate', value: 0.55 },
-      { id: 's3', name: 'Fatigue', icon: 'flash', severity: 'Moderate', value: 0.5 },
-      { id: 's4', name: 'Mood changes', icon: 'sunny', severity: 'Mild', value: 0.2 },
+      { id: 's1', name: 'Cramping', severity: 'Mild',     icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'High',     icon: 'water', value: 0.75 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Moderate', icon: 'sunny', value: 0.4 },
+    ],
+  },
+  {
+    id: '2',
+    timestamp: Date.now() - 7 * DAY,
+    estrogenLevel: 310,
+    cycleDay: 9,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild',     icon: 'pulse', value: 0.2  },
+      { id: 's2', name: 'Bloating', severity: 'Moderate', icon: 'water', value: 0.55 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.2  },
+    ],
+  },
+  {
+    id: '3',
+    timestamp: Date.now() - 12 * DAY,
+    estrogenLevel: 95,
+    cycleDay: 4,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild', icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Mild', icon: 'water', value: 0.2  },
+      { id: 's3', name: 'Fatigue',  severity: 'Mild', icon: 'flash', value: 0.2  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.2 },
+    ],
+  },
+  // ── Previous cycle ─────────────────────────────────────────────────────
+  {
+    id: '4',
+    timestamp: Date.now() - 18 * DAY,
+    estrogenLevel: 80,
+    cycleDay: 28,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild', icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Mild', icon: 'water', value: 0.2  },
+      { id: 's3', name: 'Fatigue',  severity: 'Mild', icon: 'flash', value: 0.2  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.15 },
+    ],
+  },
+  {
+    id: '5',
+    timestamp: Date.now() - 24 * DAY,
+    estrogenLevel: 285,
+    cycleDay: 22,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild',     icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Moderate', icon: 'water', value: 0.55 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.2  },
+    ],
+  },
+  {
+    id: '6',
+    timestamp: Date.now() - 31 * DAY,
+    estrogenLevel: 520,
+    cycleDay: 15,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Moderate', icon: 'pulse', value: 0.45 },
+      { id: 's2', name: 'Bloating', severity: 'High',     icon: 'water', value: 0.75 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Moderate', icon: 'sunny', value: 0.4 },
+    ],
+  },
+  {
+    id: '7',
+    timestamp: Date.now() - 37 * DAY,
+    estrogenLevel: 210,
+    cycleDay: 9,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild',     icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Moderate', icon: 'water', value: 0.55 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.2  },
+    ],
+  },
+  // ── Two cycles ago ─────────────────────────────────────────────────────
+  {
+    id: '8',
+    timestamp: Date.now() - 50 * DAY,
+    estrogenLevel: 75,
+    cycleDay: 2,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild', icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Mild', icon: 'water', value: 0.2  },
+      { id: 's3', name: 'Fatigue',  severity: 'Mild', icon: 'flash', value: 0.2  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.15 },
+    ],
+  },
+  {
+    id: '9',
+    timestamp: Date.now() - 57 * DAY,
+    estrogenLevel: 490,
+    cycleDay: 16,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Moderate', icon: 'pulse', value: 0.45 },
+      { id: 's2', name: 'Bloating', severity: 'High',     icon: 'water', value: 0.75 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Moderate', icon: 'sunny', value: 0.4 },
+    ],
+  },
+  {
+    id: '10',
+    timestamp: Date.now() - 63 * DAY,
+    estrogenLevel: 340,
+    cycleDay: 10,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild',     icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Moderate', icon: 'water', value: 0.55 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.2  },
+    ],
+  },
+  {
+    id: '11',
+    timestamp: Date.now() - 72 * DAY,
+    estrogenLevel: 115,
+    cycleDay: 27,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Mild', icon: 'pulse', value: 0.25 },
+      { id: 's2', name: 'Bloating', severity: 'Mild', icon: 'water', value: 0.2  },
+      { id: 's3', name: 'Fatigue',  severity: 'Mild', icon: 'flash', value: 0.2  },
+      { id: 's4', name: 'Mood changes', severity: 'Mild', icon: 'sunny', value: 0.15 },
+    ],
+  },
+  {
+    id: '12',
+    timestamp: Date.now() - 79 * DAY,
+    estrogenLevel: 430,
+    cycleDay: 13,
+    symptoms: [
+      { id: 's1', name: 'Cramping', severity: 'Moderate', icon: 'pulse', value: 0.45 },
+      { id: 's2', name: 'Bloating', severity: 'High',     icon: 'water', value: 0.75 },
+      { id: 's3', name: 'Fatigue',  severity: 'Moderate', icon: 'flash', value: 0.5  },
+      { id: 's4', name: 'Mood changes', severity: 'Moderate', icon: 'sunny', value: 0.4 },
     ],
   },
 ];
