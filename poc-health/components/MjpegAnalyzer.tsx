@@ -4,7 +4,7 @@ import { WebView } from 'react-native-webview';
 
 interface Props {
   streamUrl: string;
-  onFrame: () => void;
+  onFrame: (brightness: number) => void;
   onError: (msg: string) => void;
   onStatus?: (msg: string) => void;
 }
@@ -59,20 +59,13 @@ img.onerror = function() {
 
 export default function MjpegAnalyzer({ streamUrl, onFrame, onError, onStatus }: Props) {
   function handleMessage(event: { nativeEvent: { data: string } }) {
-    const data = event.nativeEvent.data;
-    if (data === 'frame') {
-      onFrame();
-    } else if (data === 'stream_ok') {
-      onStatus?.('img loaded — counting frames');
-    } else {
-      try {
-        const payload = JSON.parse(data);
-        if (payload.error) {
-          onError(payload.error);
-          onStatus?.('error: ' + payload.error);
-        }
-      } catch {}
-    }
+    try {
+      const payload = JSON.parse(event.nativeEvent.data);
+      if (payload.t === 'f')        onFrame(payload.b ?? 0);
+      else if (payload.t === 'ok')  onStatus?.('img loaded — counting frames');
+      else if (payload.t === 'err') { onError('img load failed'); onStatus?.('error: img load failed'); }
+      else if (payload.error)       { onError(payload.error); onStatus?.('error: ' + payload.error); }
+    } catch {}
   }
 
   return (

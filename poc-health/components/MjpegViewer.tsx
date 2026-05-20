@@ -4,79 +4,35 @@ import { WebView } from 'react-native-webview';
 
 interface Props {
   streamUrl: string;
-  onFrame?: () => void;
+  onFrame?: (brightness: number) => void;
   onError?: (msg: string) => void;
   onStatus?: (msg: string) => void;
 }
 
-const makeHtml = (url: string) => `<!DOCTYPE html><html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #000; width: 100vw; height: 100vh; display: flex;
-           align-items: center; justify-content: center; overflow: hidden; }
-    #stream { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
-  </style>
-</head>
-<body>
-  <img id="stream" src="${url}">
-<script>
-var img = document.getElementById('stream');
-var canvas = document.createElement('canvas');
-canvas.width = 8; canvas.height = 8;
-var ctx = canvas.getContext('2d');
-var last = null;
-
-function poll() {
-  try {
-    ctx.drawImage(img, 0, 0, 8, 8);
-    var d = ctx.getImageData(0, 0, 8, 8).data;
-    var h = 0;
-    for (var i = 0; i < d.length; i++) h = (h * 31 + d[i]) | 0;
-    if (last !== null && h !== last) window.ReactNativeWebView.postMessage('frame');
-    last = h;
-  } catch(e) {}
-  requestAnimationFrame(poll);
-}
-
-img.onload = function() {
-  window.ReactNativeWebView.postMessage('stream_ok');
-  poll();
-};
-img.onerror = function() {
-  window.ReactNativeWebView.postMessage(JSON.stringify({ error: 'img load failed: ' + img.src }));
-};
-</script>
-</body></html>`;
-
 export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: Props) {
+  // Point at the ESP32's / endpoint which serves the viewer HTML directly.
+  // Same-origin img src="/stream" avoids all CORS/ATS issues.
+  const viewerUrl = streamUrl.replace('/stream', '/');
+
   function handleMessage(event: { nativeEvent: { data: string } }) {
-    const data = event.nativeEvent.data;
-    if (data === 'frame') {
-      onFrame?.();
-    } else if (data === 'stream_ok') {
-      onStatus?.('Stream connected');
-    } else {
-      try {
-        const payload = JSON.parse(data);
-        if (payload.error) onError?.(payload.error);
-      } catch {}
-    }
+    try {
+      const payload = JSON.parse(event.nativeEvent.data);
+      if (payload.t === 'f')   onFrame?.(payload.b ?? 0);
+      else if (payload.t === 'ok')  onStatus?.('Stream connected');
+      else if (payload.t === 'err') onError?.('Stream image failed to load');
+      else if (payload.error)       onError?.(payload.error);
+    } catch {}
   }
 
   return (
     <View style={styles.container}>
       <WebView
-        source={{ html: makeHtml(streamUrl) }}
+        source={{ uri: viewerUrl }}
         style={styles.webview}
         onMessage={handleMessage}
-        originWhitelist={['*']}
-        mixedContentMode="always"
+        onError={(e) => onError?.(`Load error: ${e.nativeEvent.description}`)}
+        originWhitelist={['http://*', 'https://*']}
         javaScriptEnabled
-        allowUniversalAccessFromFileURLs
-        allowFileAccess
         scrollEnabled={false}
         bounces={false}
         allowsInlineMediaPlayback

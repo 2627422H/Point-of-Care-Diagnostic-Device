@@ -32,12 +32,16 @@ static volatile bool s_rainbow_active = false;
 static TaskHandle_t  s_fade_task      = NULL;
 static volatile bool s_fade_active    = false;
 
+static TaskHandle_t  s_pulse_task     = NULL;
+static volatile bool s_pulse_active   = false;
+
 /* Stop all background animation tasks and wait for them to exit. */
 static void stop_animations(void)
 {
-    bool had = (s_rainbow_active || s_fade_active);
+    bool had = (s_rainbow_active || s_fade_active || s_pulse_active);
     s_rainbow_active = false;
     s_fade_active    = false;
+    s_pulse_active   = false;
     if (had) vTaskDelay(pdMS_TO_TICKS(50));
 }
 
@@ -244,4 +248,67 @@ void rgb_led_fade_start(uint8_t r, uint8_t g, uint8_t b,
 void rgb_led_fade_stop(void)
 {
     if (s_fade_active) stop_animations();
+}
+
+/* ── LED pulse ────────────────────────────────────────────────────────────── */
+
+typedef struct {
+    float    r, g, b;
+    uint32_t period_ms;
+} pulse_params_t;
+
+static void pulse_task(void *pvParameters)
+{
+    pulse_params_t *p = (pulse_params_t *)pvParameters;
+    float    r0        = p->r;
+    float    g0        = p->g;
+    float    b0        = p->b;
+    uint32_t period_ms = p->period_ms;
+    free(p);
+
+    const uint32_t step_ms = 20;  /* 50 Hz */
+    uint32_t t = 0;
+
+    while (s_pulse_active) {
+        /* sine wave: starts at 0, peaks at period/2, returns to 0 */
+        float phase  = 3.14159f * t / period_ms;  /* 0 → π over one period */
+        float bright = sinf(phase);
+
+        rgb_led_set((uint8_t)(r0 * bright),
+                    (uint8_t)(g0 * bright),
+                    (uint8_t)(b0 * bright));
+
+        vTaskDelay(pdMS_TO_TICKS(step_ms));
+        t = (t + step_ms) % (period_ms * 2);  /* full 0→π→0 cycle = 2×period */
+    }
+
+    ledc_set_duty(LEDC_MODE, LEDC_CH_RED,   0);
+    ledc_set_duty(LEDC_MODE, LEDC_CH_GREEN, 0);
+    ledc_set_duty(LEDC_MODE, LEDC_CH_BLUE,  0);
+    ledc_update_duty(LEDC_MODE, LEDC_CH_RED);
+    ledc_update_duty(LEDC_MODE, LEDC_CH_GREEN);
+    ledc_update_duty(LEDC_MODE, LEDC_CH_BLUE);
+
+    s_pulse_task   = NULL;
+    vTaskDelete(NULL);
+}
+
+void rgb_led_pulse_start(uint8_t r, uint8_t g, uint8_t b, uint32_t period_ms)
+{
+    stop_animations();
+
+    pulse_params_t *p = malloc(sizeof(pulse_params_t));
+    if (!p) return;
+    p->r         = (float)r;
+    p->g         = (float)g;
+    p->b         = (float)b;
+    p->period_ms = period_ms;
+
+    s_pulse_active = true;
+    xTaskCreate(pulse_task, "led_pulse", 2048, p, 5, &s_pulse_task);
+}
+
+void rgb_led_pulse_stop(void)
+{
+    if (s_pulse_active) stop_animations();
 }

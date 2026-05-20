@@ -56,6 +56,16 @@ void rgb_led_fade_start(uint8_t r, uint8_t g, uint8_t b,
 /** Stop an in-progress fade. LED turns off. */
 void rgb_led_fade_stop(void);
 
+/**
+ * Pulse the LED between off and (r,g,b) using a smooth sine wave.
+ * period_ms is the full on→off→on cycle time.
+ * Useful for status indication (e.g. BLE advertising, WiFi connecting).
+ */
+void rgb_led_pulse_start(uint8_t r, uint8_t g, uint8_t b, uint32_t period_ms);
+
+/** Stop an in-progress pulse. LED turns off. */
+void rgb_led_pulse_stop(void);
+
 /** Solid colour shortcuts - each one stops any active rainbow or fade. */
 void rgb_led_off(void);
 void rgb_led_red(void);

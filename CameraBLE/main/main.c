@@ -24,12 +24,13 @@ static const char *TAG = "cam_main";
 /*
  * LED status scheme:
  *
- *   RAINBOW (fast, 10ms) – BLE advertising, waiting for phone to connect
- *   YELLOW solid          – credentials received, connecting to WiFi
- *   RAINBOW (slow, 40ms) – WiFi connected, HTTP stream running, idle
- *   GREEN solid           – frame just pushed to stream (brief flash)
- *   RED solid             – error
- *   OFF                   – initialising
+ *   BLUE pulse (slow, 1.5 s) – BLE advertising, waiting for phone
+ *   BLUE solid               – phone connected via BLE
+ *   CYAN pulse (fast, 0.6 s) – credentials received, connecting to WiFi
+ *   GREEN solid              – WiFi connected, MJPEG stream ready
+ *   RED solid                – error
+ *   LED taken over by fade   – recording session in progress
+ *   OFF                      – initialising
  */
 
 void app_main(void)
@@ -68,8 +69,8 @@ void app_main(void)
     ESP_LOGI(TAG, "JPEG encoder ready (buf=%zu bytes, quality=%d)",
              jpeg_buf_alloc_size, JPEG_QUALITY);
 
-    /* Phase 1: BLE — fast rainbow while waiting for phone */
-    rgb_led_rainbow_start(10);
+    /* Phase 1: BLE — slow blue pulse while advertising, waiting for phone */
+    rgb_led_pulse_start(0, 0, 255, 1500);
     ESP_ERROR_CHECK(ble_server_init());
     ESP_LOGI(TAG, "BLE advertising. Connect and send WiFi credentials.");
 
@@ -78,8 +79,8 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "Credentials received: SSID='%s'", ble_server_get_ssid());
 
-    /* Phase 2: WiFi — solid yellow while connecting */
-    rgb_led_yellow();
+    /* Phase 2: WiFi — fast cyan pulse while connecting */
+    rgb_led_pulse_start(0, 200, 255, 600);
     char ip[16] = {0};
     ret = wifi_connect(ble_server_get_ssid(), ble_server_get_password(), ip);
     if (ret != ESP_OK) {
@@ -92,8 +93,7 @@ void app_main(void)
     ble_server_notify_ip(ip);
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    /* Phase 3: stream starting — cyan briefly */
-    rgb_led_cyan();
+    /* Phase 3: stream starting — solid green once ready */
     ret = wifi_stream_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Stream start failed");
@@ -101,10 +101,7 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "MJPEG stream at http://%s/stream", ip);
-
-    /* Once streaming, run slow rainbow in background.
-     * Each successful frame briefly flashes green, then returns to rainbow. */
-    rgb_led_rainbow_start(40);
+    rgb_led_green();   /* solid green = streaming ready */
 
     uint32_t   frame_id  = 0;
     TickType_t last_tick = xTaskGetTickCount();

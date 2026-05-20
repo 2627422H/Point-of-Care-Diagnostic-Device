@@ -285,15 +285,56 @@ static esp_err_t record_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, resp);
 }
 
-/* HTTP handler for GET / – simple status page */
+/* HTTP handler for GET / – full-screen MJPEG viewer with RN bridge messaging */
 static esp_err_t index_handler(httpd_req_t *req)
 {
-    const char *html =
-        "<html><body>"
-        "<h2>ESP32-CAM Stream</h2>"
-        "<img src='/stream' style='max-width:100%%'/>"
-        "</body></html>";
+    /* Single-quoted HTML inside a double-quoted C string — no escaping needed.
+     * The ReactNativeWebView bridge is injected by react-native-webview; the
+     * guard (window.ReactNativeWebView&&...) makes the page work in plain
+     * Safari too. */
+    static const char html[] =
+        "<!DOCTYPE html><html>"
+        "<head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1.0,maximum-scale=1.0'>"
+        "<style>"
+        "*{margin:0;padding:0;box-sizing:border-box}"
+        "body{background:#000;width:100vw;height:100vh;display:flex;"
+        "align-items:center;justify-content:center;overflow:hidden}"
+        "#s{max-width:100%;max-height:100%;object-fit:contain;display:block}"
+        "</style></head>"
+        "<body><img id='s' src='/stream'>"
+        "<script>"
+        "var img=document.getElementById('s');"
+        "var cv=document.createElement('canvas');"
+        "cv.width=8;cv.height=8;"
+        "var ctx=cv.getContext('2d'),last=null;"
+        "function poll(){"
+        "try{"
+        "ctx.drawImage(img,0,0,8,8);"
+        "var d=ctx.getImageData(0,0,8,8).data,h=0;"
+        "for(var i=0;i<d.length;i++)h=(h*31+d[i])|0;"
+        "if(last!==null&&h!==last&&window.ReactNativeWebView){"
+        "var br=0;"
+        "for(var j=0;j<d.length;j+=4)br+=d[j]*299+d[j+1]*587+d[j+2]*114;"
+        "window.ReactNativeWebView.postMessage(JSON.stringify({t:'f',b:Math.round(br/64000)}));"
+        "}"
+        "last=h;"
+        "}catch(e){}"
+        "requestAnimationFrame(poll);"
+        "}"
+        "img.onload=function(){"
+        "if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'ok'}));"
+        "poll();"
+        "};"
+        "img.onerror=function(){"
+        "if(window.ReactNativeWebView)"
+        "window.ReactNativeWebView.postMessage(JSON.stringify({t:'err'}));"
+        "};"
+        "</script></body></html>";
+
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, html);
 }
 

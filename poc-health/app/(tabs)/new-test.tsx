@@ -18,6 +18,7 @@ import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
 import MjpegViewer from '../../components/MjpegViewer';
 import MjpegAnalyzer from '../../components/MjpegAnalyzer';
+import BrightnessChart from '../../components/BrightnessChart';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
 
@@ -65,6 +66,7 @@ export default function NewTestScreen() {
     webViewStatus,
     recordingState,
     recordingProgress,
+    recordingResult,
     start,
     stop,
     reset,
@@ -266,11 +268,49 @@ export default function NewTestScreen() {
                 </View>
               )}
 
-              {recordingState === 'done' && (
+              {recordingState === 'done' && recordingResult && (
                 <View style={styles.recordingDone}>
-                  <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
-                  <Text style={styles.recordingLabel}>Recording complete</Text>
-                  <TouchableOpacity onPress={resetRecording} activeOpacity={0.8}>
+                  <View style={styles.recordingDoneHeader}>
+                    <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
+                    <Text style={styles.recordingDoneTitle}>Recording complete</Text>
+                  </View>
+
+                  <View style={styles.recordingSummary}>
+                    {[
+                      ['Curve',    CURVES.find(c => c.value === recordingResult.curve)?.label ?? '—'],
+                      ['Duration', `${(recordingResult.durationMs / 1000).toFixed(1)} s`],
+                      ['Frames',   String(recordingResult.framesCapured)],
+                      ['Avg FPS',  recordingResult.durationActualMs > 0
+                        ? (recordingResult.framesCapured / (recordingResult.durationActualMs / 1000)).toFixed(1)
+                        : '—'],
+                    ].map(([label, value]) => (
+                      <View key={label} style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>{label}</Text>
+                        <Text style={styles.summaryValue}>{value}</Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Text style={styles.recordingCurveDesc}>
+                    {recordingResult.curve === 0 && 'Linear: LED dimmed at a constant rate over the session.'}
+                    {recordingResult.curve === 1 && 'Exponential: fast initial drop to a long dim tail — models reagent absorption.'}
+                    {recordingResult.curve === 2 && 'Logarithmic: steep drop in first 20 % then slow fade out.'}
+                    {recordingResult.curve === 3 && 'Sigmoid: gradual start, fast mid-point transition, gradual end.'}
+                  </Text>
+
+                  {recordingResult.brightnessData.length >= 2 && (
+                    <BrightnessChart
+                      data={recordingResult.brightnessData}
+                      durationMs={recordingResult.durationActualMs}
+                    />
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.recordAgainButton}
+                    onPress={resetRecording}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="refresh" size={16} color={Colors.primary} />
                     <Text style={styles.recordAgainText}>Record again</Text>
                   </TouchableOpacity>
                 </View>
@@ -642,9 +682,38 @@ const styles = StyleSheet.create({
   curveChipTextActive:{ color: '#fff' },
 
   recordingActive: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
-  recordingDone:   { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
   recordingLabel:  { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },
   recordingPct:    { fontSize: FontSize.sm, color: Colors.textSecondary },
+
+  recordingDone: { gap: Spacing.sm, paddingVertical: Spacing.xs },
+  recordingDoneHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  recordingDoneTitle:  { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
+
+  recordingSummary: {
+    backgroundColor: Colors.sectionBackground,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    gap: 4,
+  },
+  summaryRow:   { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
+  summaryLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: '500' },
+  summaryValue: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
+
+  recordingCurveDesc: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: 17,
+    fontStyle: 'italic',
+  },
+
+  recordAgainButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    alignSelf: 'flex-start',
+    paddingTop: Spacing.xs,
+  },
   recordAgainText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
   progressBar: {
     width: '100%',

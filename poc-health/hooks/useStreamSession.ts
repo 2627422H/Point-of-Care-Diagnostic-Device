@@ -257,9 +257,12 @@ export function useStreamSession() {
     setWebViewStatus('WebView mounting…');
   }, []);
 
-  const handleWebViewFrame = useCallback(() => {
+  const handleWebViewFrame = useCallback((brightness: number) => {
     frameCountRef.current += 1;
     setFrameCount(frameCountRef.current);
+    if (recordingActiveRef.current) {
+      brightnessRef.current.push(brightness);
+    }
   }, []);
 
   const handleWebViewStatus = useCallback((msg: string) => {
@@ -366,6 +369,8 @@ export function useStreamSession() {
   const reset = useCallback(() => {
     cancelledRef.current = true;
     useWebViewRef.current = false;
+    recordingActiveRef.current = false;
+    brightnessRef.current = [];
     stopStream();
     getBle()?.stopDeviceScan();
     deviceRef.current?.cancelConnection().catch(() => {});
@@ -387,7 +392,18 @@ export function useStreamSession() {
   // ── Recording session ────────────────────────────────────────────────────
   const [recordingState, setRecordingState] = useState<'idle' | 'active' | 'done'>('idle');
   const [recordingProgress, setRecordingProgress] = useState(0);
+  const [recordingResult, setRecordingResult] = useState<{
+    curve: 0 | 1 | 2 | 3;
+    durationMs: number;
+    framesCapured: number;
+    durationActualMs: number;
+    brightnessData: number[];
+  } | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartFrameRef = useRef(0);
+  const recordingStartTimeRef = useRef(0);
+  const recordingActiveRef = useRef(false);
+  const brightnessRef = useRef<number[]>([]);
 
   const startRecording = useCallback(async (params: {
     curve: 0 | 1 | 2 | 3;
@@ -407,10 +423,15 @@ export function useStreamSession() {
       return;
     }
 
+    recordingStartFrameRef.current = frameCountRef.current;
+    recordingStartTimeRef.current = Date.now();
+    brightnessRef.current = [];
+    recordingActiveRef.current = true;
     setRecordingState('active');
     setRecordingProgress(0);
+    setRecordingResult(null);
 
-    const start = Date.now();
+    const start = recordingStartTimeRef.current;
     recordingTimerRef.current = setInterval(() => {
       const elapsed = Date.now() - start;
       const progress = Math.min(elapsed / duration, 1);
@@ -418,6 +439,14 @@ export function useStreamSession() {
       if (progress >= 1) {
         clearInterval(recordingTimerRef.current!);
         recordingTimerRef.current = null;
+        recordingActiveRef.current = false;
+        setRecordingResult({
+          curve,
+          durationMs: duration,
+          framesCapured: frameCountRef.current - recordingStartFrameRef.current,
+          durationActualMs: Date.now() - start,
+          brightnessData: [...brightnessRef.current],
+        });
         setRecordingState('done');
       }
     }, 100);
@@ -426,8 +455,11 @@ export function useStreamSession() {
   const resetRecording = useCallback(() => {
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
     recordingTimerRef.current = null;
+    recordingActiveRef.current = false;
+    brightnessRef.current = [];
     setRecordingState('idle');
     setRecordingProgress(0);
+    setRecordingResult(null);
   }, []);
 
   const fps = frameCount > 0
@@ -438,7 +470,7 @@ export function useStreamSession() {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
     bytesReceived, useWebViewMode, webViewStatus,
-    recordingState, recordingProgress,
+    recordingState, recordingProgress, recordingResult,
     start, stop, reset, submitWifiCredentials,
     enableWebView, handleWebViewFrame, handleWebViewStatus,
     startRecording, resetRecording,
