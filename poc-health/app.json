@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.pochealth.app",
+      "bundleIdentifier": "com.stefanvuck.pochealth",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
         "NSBluetoothPeripheralUsageDescription": "POC Health uses Bluetooth to connect to your POC device and receive test results.",
@@ -55,7 +55,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FFF7F5"
       },
-      "package": "com.pochealth.app",
+      "package": "com.stefanvuck.pochealth",
       "permissions": [
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",

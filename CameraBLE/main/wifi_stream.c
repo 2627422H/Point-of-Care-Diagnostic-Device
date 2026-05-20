@@ -1,6 +1,9 @@
 #include "wifi_stream.h"
+#include "rgb_led.h"
+#include "camera.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_wifi.h"
@@ -18,7 +21,7 @@ static const char *TAG = "wifi_stream";
 /* ── WiFi connection ──────────────────────────────────────────────────────── */
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAIL_BIT       BIT1
-#define WIFI_MAX_RETRIES    5
+#define WIFI_MAX_RETRIES    10
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static int                s_retry_count      = 0;
@@ -29,11 +32,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "Disconnected: reason=%d (%s)", disc->reason,
+                 disc->reason == 2   ? "AUTH_EXPIRE" :
+                 disc->reason == 15  ? "4WAY_HANDSHAKE_TIMEOUT (wrong password?)" :
+                 disc->reason == 201 ? "NO_AP_FOUND (SSID not visible)" :
+                 disc->reason == 202 ? "AUTH_FAIL (wrong password or auth mode)" :
+                 disc->reason == 203 ? "ASSOC_FAIL" :
+                 disc->reason == 204 ? "HANDSHAKE_TIMEOUT" : "other");
         if (s_retry_count < WIFI_MAX_RETRIES) {
             esp_wifi_connect();
             s_retry_count++;
-            ESP_LOGW(TAG, "WiFi disconnected, retrying (%d/%d)...",
-                     s_retry_count, WIFI_MAX_RETRIES);
+            ESP_LOGW(TAG, "Retrying (%d/%d)...", s_retry_count, WIFI_MAX_RETRIES);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
@@ -70,7 +80,14 @@ esp_err_t wifi_connect(const char *ssid, const char *password, char *out_ip)
     wifi_config_t wifi_cfg = {0};
     strncpy((char *)wifi_cfg.sta.ssid,     ssid,     sizeof(wifi_cfg.sta.ssid) - 1);
     strncpy((char *)wifi_cfg.sta.password, password, sizeof(wifi_cfg.sta.password) - 1);
-    wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_cfg.sta.threshold.authmode  = WIFI_AUTH_WPA_PSK;
+    wifi_cfg.sta.sae_pwe_h2e         = WPA3_SAE_PWE_BOTH;
+    wifi_cfg.sta.pmf_cfg.capable     = true;
+    wifi_cfg.sta.pmf_cfg.required    = false;
+    /* Scan all channels on both bands before connecting — prevents NO_AP_FOUND
+     * when the hotspot is on a non-default channel or band. */
+    wifi_cfg.sta.scan_method         = WIFI_ALL_CHANNEL_SCAN;
+    wifi_cfg.sta.sort_method         = WIFI_CONNECT_AP_BY_SIGNAL;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
@@ -78,10 +95,11 @@ esp_err_t wifi_connect(const char *ssid, const char *password, char *out_ip)
 
     ESP_LOGI(TAG, "Connecting to SSID: %s", ssid);
 
+    /* 30 s — hotspots (especially phones) can take longer to accept a station. */
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdFALSE, pdFALSE,
-                                           pdMS_TO_TICKS(15000));
+                                           pdMS_TO_TICKS(30000));
 
     if (bits & WIFI_CONNECTED_BIT) {
         esp_netif_ip_info_t ip_info;
@@ -210,6 +228,63 @@ static esp_err_t stream_handler(httpd_req_t *req)
     return ret;
 }
 
+static void ae_unlock_task(void *arg)
+{
+    uint32_t delay_ms = *(uint32_t *)arg;
+    free(arg);
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    camera_unlock_exposure();
+    vTaskDelete(NULL);
+}
+
+/* HTTP handler for GET /record?curve=<0-3>&r=<0-255>&g=<0-255>&b=<0-255>
+ *                              &duration=<ms>&step=<ms>
+ *
+ * Triggers an LED fade and returns JSON with the session parameters so the
+ * Python script can timestamp the recording window.
+ *
+ * curve: 0=linear  1=exponential  2=logarithmic  3=sigmoid
+ */
+static esp_err_t record_handler(httpd_req_t *req)
+{
+    char query[128] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+
+    char p[16];
+    uint8_t  r = 255, g = 255, b = 255;
+    int      curve       = RGB_LED_CURVE_EXPONENTIAL;
+    uint32_t duration_ms = 5000;
+    uint32_t step_ms     = 20;
+
+    if (httpd_query_key_value(query, "r",        p, sizeof(p)) == ESP_OK) r           = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "g",        p, sizeof(p)) == ESP_OK) g           = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "b",        p, sizeof(p)) == ESP_OK) b           = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "curve",    p, sizeof(p)) == ESP_OK) curve       = atoi(p);
+    if (httpd_query_key_value(query, "duration", p, sizeof(p)) == ESP_OK) duration_ms = (uint32_t)atoi(p);
+    if (httpd_query_key_value(query, "step",     p, sizeof(p)) == ESP_OK) step_ms     = (uint32_t)atoi(p);
+
+    /* Lock AEC/AGC so the camera measures absolute brightness, not compensated. */
+    camera_lock_exposure();
+    rgb_led_fade_start(r, g, b, (rgb_led_curve_t)curve, duration_ms, step_ms);
+
+    /* Spawn a one-shot task to re-enable auto-exposure after the fade ends. */
+    uint32_t *unlock_ms = malloc(sizeof(uint32_t));
+    if (unlock_ms) {
+        *unlock_ms = duration_ms + 500;
+        xTaskCreate(ae_unlock_task, "ae_unlock", 2048, unlock_ms, 3, NULL);
+    }
+
+    char resp[200];
+    snprintf(resp, sizeof(resp),
+             "{\"status\":\"ok\",\"curve\":%d,\"r\":%d,\"g\":%d,\"b\":%d,"
+             "\"duration_ms\":%lu,\"step_ms\":%lu}",
+             curve, r, g, b, (unsigned long)duration_ms, (unsigned long)step_ms);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_sendstr(req, resp);
+}
+
 /* HTTP handler for GET / – simple status page */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -241,7 +316,7 @@ esp_err_t wifi_stream_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port      = 80;
-    config.max_uri_handlers = 4;
+    config.max_uri_handlers = 8;
     /* Allow the stream handler to block in the URI handler task. */
     config.stack_size       = 16384;
     config.lru_purge_enable = true;
@@ -263,6 +338,13 @@ esp_err_t wifi_stream_start(void)
         .user_ctx = NULL,
     };
     httpd_register_uri_handler(s_httpd, &index_uri);
+
+    httpd_uri_t record_uri = {
+        .uri     = "/record",
+        .method  = HTTP_GET,
+        .handler = record_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &record_uri);
 
     ESP_LOGI(TAG, "HTTP server started. Stream at http://<ip>/stream");
     return ESP_OK;

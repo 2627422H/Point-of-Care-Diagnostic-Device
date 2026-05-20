@@ -10,14 +10,23 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Device from 'expo-device';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
 import MjpegViewer from '../../components/MjpegViewer';
 import MjpegAnalyzer from '../../components/MjpegAnalyzer';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
+
+const CURVES = [
+  { label: 'Exponential', value: 1 as const },
+  { label: 'Linear',      value: 0 as const },
+  { label: 'Logarithmic', value: 2 as const },
+  { label: 'Sigmoid',     value: 3 as const },
+] as const;
 
 const PHASE_LABEL: Record<StreamPhase, string> = {
   idle:          'READY',
@@ -54,6 +63,8 @@ export default function NewTestScreen() {
     bytesReceived,
     useWebViewMode,
     webViewStatus,
+    recordingState,
+    recordingProgress,
     start,
     stop,
     reset,
@@ -61,11 +72,24 @@ export default function NewTestScreen() {
     enableWebView,
     handleWebViewFrame,
     handleWebViewStatus,
+    startRecording,
+    resetRecording,
   } = useStreamSession();
 
-  const [ssid,         setSsid]         = useState('');
-  const [password,     setPassword]     = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [ssid,           setSsid]           = useState('');
+  const [password,       setPassword]       = useState('');
+  const [showPassword,   setShowPassword]   = useState(false);
+  const [selectedCurve,  setSelectedCurve]  = useState<0|1|2|3>(1);
+  const [duration,       setDuration]       = useState('10000');
+
+  function handleUseHotspot() {
+    const name = Device.deviceName ?? '';
+    if (name) setSsid(name);
+    // Open Personal Hotspot settings so the user can check/copy their password.
+    Linking.openURL('App-Prefs:Personal_Hotspot').catch(() =>
+      Linking.openURL('app-settings:')
+    );
+  }
 
   /* Manual IP fallback — lets user type the IP directly if BLE provisioning
    * delivers the wrong address or the stream URL isn't being set. */
@@ -189,6 +213,71 @@ export default function NewTestScreen() {
             </View>
           ) : null}
 
+          {/* ── RECORDING PANEL ── */}
+          {isStreaming && streamUrl && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>RECORD SESSION</Text>
+
+              {recordingState === 'idle' && (
+                <>
+                  <Text style={styles.fieldLabel}>Brightness curve</Text>
+                  <View style={styles.curveRow}>
+                    {CURVES.map((c) => (
+                      <TouchableOpacity
+                        key={c.value}
+                        style={[styles.curveChip, selectedCurve === c.value && styles.curveChipActive]}
+                        onPress={() => setSelectedCurve(c.value)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[styles.curveChipText, selectedCurve === c.value && styles.curveChipTextActive]}>
+                          {c.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.fieldLabel}>Duration (ms)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={duration}
+                    onChangeText={setDuration}
+                    keyboardType="number-pad"
+                    placeholderTextColor={Colors.textMuted}
+                  />
+
+                  <TouchableOpacity
+                    style={styles.submitButton}
+                    onPress={() => startRecording({ curve: selectedCurve, duration: parseInt(duration, 10) || 10000 })}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.submitLabel}>START RECORDING</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {recordingState === 'active' && (
+                <View style={styles.recordingActive}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.recordingLabel}>Recording…</Text>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${recordingProgress * 100}%` }]} />
+                  </View>
+                  <Text style={styles.recordingPct}>{Math.round(recordingProgress * 100)}%</Text>
+                </View>
+              )}
+
+              {recordingState === 'done' && (
+                <View style={styles.recordingDone}>
+                  <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
+                  <Text style={styles.recordingLabel}>Recording complete</Text>
+                  <TouchableOpacity onPress={resetRecording} activeOpacity={0.8}>
+                    <Text style={styles.recordAgainText}>Record again</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          )}
+
           {/* Manual IP entry — shown while streaming if stream URL not set,
               or toggled by the user if the stream appears blank */}
           {isStreaming && !displayUrl && (
@@ -263,8 +352,15 @@ export default function NewTestScreen() {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>WiFi Setup</Text>
               <Text style={styles.cardDesc}>
-                Enter your WiFi credentials once. They will be stored and used automatically.
+                The device needs to join the same network as your phone.
               </Text>
+
+              {/* Hotspot shortcut */}
+              <TouchableOpacity style={styles.hotspotButton} onPress={handleUseHotspot} activeOpacity={0.8}>
+                <Ionicons name="phone-portrait-outline" size={18} color={Colors.primary} />
+                <Text style={styles.hotspotLabel}>Use this phone's hotspot</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+              </TouchableOpacity>
 
               <Text style={styles.fieldLabel}>Network name (SSID)</Text>
               <TextInput
@@ -520,6 +616,48 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   graphPlaceholderText: { fontSize: FontSize.sm, color: Colors.textMuted },
+
+  hotspotButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.sectionBackground,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  hotspotLabel: { flex: 1, fontSize: FontSize.sm, fontWeight: '600', color: Colors.primary },
+
+  curveRow:          { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  curveChip: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  curveChipActive:    { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  curveChipText:      { fontSize: FontSize.sm, color: Colors.text, fontWeight: '600' },
+  curveChipTextActive:{ color: '#fff' },
+
+  recordingActive: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
+  recordingDone:   { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
+  recordingLabel:  { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },
+  recordingPct:    { fontSize: FontSize.sm, color: Colors.textSecondary },
+  recordAgainText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
+  progressBar: {
+    width: '100%',
+    height: 6,
+    backgroundColor: Colors.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: Colors.primary,
+    borderRadius: 3,
+  },
 
   step: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
   stepBadge: {

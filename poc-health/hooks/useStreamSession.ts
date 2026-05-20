@@ -384,6 +384,52 @@ export function useStreamSession() {
     setBleMode(false);
   }, []);
 
+  // ── Recording session ────────────────────────────────────────────────────
+  const [recordingState, setRecordingState] = useState<'idle' | 'active' | 'done'>('idle');
+  const [recordingProgress, setRecordingProgress] = useState(0);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startRecording = useCallback(async (params: {
+    curve: 0 | 1 | 2 | 3;
+    duration: number;
+    r?: number; g?: number; b?: number;
+    step?: number;
+  }) => {
+    const ip = streamUrl ? streamUrl.replace('/stream', '').replace('http://', '') : null;
+    if (!ip) return;
+
+    const { curve, duration, r = 255, g = 255, b = 255, step = 10 } = params;
+    const url = `http://${ip}/record?curve=${curve}&r=${r}&g=${g}&b=${b}&duration=${duration}&step=${step}`;
+
+    try {
+      await fetch(url);
+    } catch {
+      return;
+    }
+
+    setRecordingState('active');
+    setRecordingProgress(0);
+
+    const start = Date.now();
+    recordingTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const progress = Math.min(elapsed / duration, 1);
+      setRecordingProgress(progress);
+      if (progress >= 1) {
+        clearInterval(recordingTimerRef.current!);
+        recordingTimerRef.current = null;
+        setRecordingState('done');
+      }
+    }, 100);
+  }, [streamUrl]);
+
+  const resetRecording = useCallback(() => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    recordingTimerRef.current = null;
+    setRecordingState('idle');
+    setRecordingProgress(0);
+  }, []);
+
   const fps = frameCount > 0
     ? (frameCount / Math.max(1, (Date.now() - streamStartRef.current) / 1000)).toFixed(1)
     : '0.0';
@@ -392,7 +438,9 @@ export function useStreamSession() {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
     bytesReceived, useWebViewMode, webViewStatus,
+    recordingState, recordingProgress,
     start, stop, reset, submitWifiCredentials,
     enableWebView, handleWebViewFrame, handleWebViewStatus,
+    startRecording, resetRecording,
   };
 }

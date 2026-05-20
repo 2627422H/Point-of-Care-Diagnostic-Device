@@ -22,3 +22,5 @@ idf_component_register(
         esp_event
         esp_http_server
 )
+
+target_link_libraries(${COMPONENT_LIB} PRIVATE m)

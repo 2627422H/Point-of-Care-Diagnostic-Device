@@ -19,7 +19,7 @@ static const char *TAG = "cam_main";
 #define CAM_V_RES       640
 #define JPEG_OUT_BUF_KB 800
 #define JPEG_QUALITY    85
-#define TARGET_FRAME_MS 100
+#define TARGET_FRAME_MS 50
 
 /*
  * LED status scheme:

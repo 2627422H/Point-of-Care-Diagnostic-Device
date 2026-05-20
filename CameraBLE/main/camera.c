@@ -343,6 +343,26 @@ esp_err_t camera_init(void)
     return ESP_OK;
 }
 
+esp_err_t camera_lock_exposure(void)
+{
+    if (!s_sensor) return ESP_ERR_INVALID_STATE;
+    /* OV5647 reg 0x3503: bit0=AEC manual, bit1=AGC manual.
+     * Setting 0x07 freezes AEC + AGC at their current auto-converged values. */
+    esp_cam_sensor_reg_val_t rv = { .regaddr = 0x3503, .value = 0x07 };
+    esp_err_t ret = esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    if (ret == ESP_OK) ESP_LOGI(TAG, "Exposure locked (manual AEC+AGC)");
+    return ret;
+}
+
+esp_err_t camera_unlock_exposure(void)
+{
+    if (!s_sensor) return ESP_ERR_INVALID_STATE;
+    esp_cam_sensor_reg_val_t rv = { .regaddr = 0x3503, .value = 0x00 };
+    esp_err_t ret = esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    if (ret == ESP_OK) ESP_LOGI(TAG, "Exposure unlocked (auto AEC+AGC)");
+    return ret;
+}
+
 esp_err_t camera_capture_frame(const uint8_t **frame_buf, size_t *frame_size)
 {
     xSemaphoreTake(s_frame_sem, 0);
