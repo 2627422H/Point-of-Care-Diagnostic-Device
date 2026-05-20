@@ -239,7 +239,7 @@ export function useStreamSession() {
       const url = `http://${ip}/stream`;
       setStreamUrl(url);
       console.log('[stream] Stream URL set to:', url);
-      startFetchStream(url);
+      // MjpegViewer (WebView) handles display and frame counting — no fetch stream needed.
       safeSetPhase('streaming');
     } catch (err: any) {
       if (!cancelledRef.current) {
@@ -430,7 +430,16 @@ export function useStreamSession() {
 
     setRecordingFetching(true);
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+      } catch (err: any) {
+        clearTimeout(timeout);
+        throw err;
+      }
       if (!res.ok) {
         setRecordingError(`Device returned HTTP ${res.status}`);
         setRecordingFetching(false);
