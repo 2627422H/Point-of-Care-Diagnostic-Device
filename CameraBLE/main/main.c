@@ -121,10 +121,6 @@ void app_main(void)
         ret = camera_capture_frame(&frame_buf, &frame_size);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Capture error: %s", esp_err_to_name(ret));
-            /* Flash red briefly then resume rainbow */
-            rgb_led_red();
-            vTaskDelay(pdMS_TO_TICKS(200));
-            rgb_led_rainbow_start(40);
             continue;
         }
 
@@ -147,10 +143,6 @@ void app_main(void)
 
         ret = wifi_stream_push_frame(jpeg_buf, jpeg_out_size);
         if (ret == ESP_OK) {
-            /* Brief green flash to confirm frame sent, then back to rainbow */
-            rgb_led_green();
-            vTaskDelay(pdMS_TO_TICKS(30));
-            rgb_led_rainbow_start(40);
             ESP_LOGI(TAG, "Frame %lu: %lu bytes",
                      (unsigned long)frame_id, (unsigned long)jpeg_out_size);
         } else {

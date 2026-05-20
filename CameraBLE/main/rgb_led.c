@@ -1,5 +1,7 @@
 #include "rgb_led.h"
 
+#include <math.h>
+#include <stdlib.h>
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -23,9 +25,21 @@ static const char *TAG = "rgb_led";
 #define LEDC_CH_GREEN   LEDC_CHANNEL_1
 #define LEDC_CH_BLUE    LEDC_CHANNEL_2
 
-/* ── Rainbow task state ───────────────────────────────────────────────────── */
-static TaskHandle_t s_rainbow_task = NULL;
+/* ── Animation task state ─────────────────────────────────────────────────── */
+static TaskHandle_t  s_rainbow_task   = NULL;
 static volatile bool s_rainbow_active = false;
+
+static TaskHandle_t  s_fade_task      = NULL;
+static volatile bool s_fade_active    = false;
+
+/* Stop all background animation tasks and wait for them to exit. */
+static void stop_animations(void)
+{
+    bool had = (s_rainbow_active || s_fade_active);
+    s_rainbow_active = false;
+    s_fade_active    = false;
+    if (had) vTaskDelay(pdMS_TO_TICKS(50));
+}
 
 esp_err_t rgb_led_init(void)
 {
@@ -68,14 +82,14 @@ void rgb_led_set(uint8_t r, uint8_t g, uint8_t b)
     ledc_update_duty(LEDC_MODE, LEDC_CH_BLUE);
 }
 
-void rgb_led_off(void)    { rgb_led_rainbow_stop(); rgb_led_set(0,   0,   0);   }
-void rgb_led_red(void)    { rgb_led_rainbow_stop(); rgb_led_set(255, 0,   0);   }
-void rgb_led_green(void)  { rgb_led_rainbow_stop(); rgb_led_set(0,   255, 0);   }
-void rgb_led_blue(void)   { rgb_led_rainbow_stop(); rgb_led_set(0,   0,   255); }
-void rgb_led_white(void)  { rgb_led_rainbow_stop(); rgb_led_set(255, 255, 255); }
-void rgb_led_yellow(void) { rgb_led_rainbow_stop(); rgb_led_set(255, 180, 0);   }
-void rgb_led_cyan(void)   { rgb_led_rainbow_stop(); rgb_led_set(0,   255, 180); }
-void rgb_led_purple(void) { rgb_led_rainbow_stop(); rgb_led_set(128, 0,   255); }
+void rgb_led_off(void)    { stop_animations(); rgb_led_set(0,   0,   0);   }
+void rgb_led_red(void)    { stop_animations(); rgb_led_set(255, 0,   0);   }
+void rgb_led_green(void)  { stop_animations(); rgb_led_set(0,   255, 0);   }
+void rgb_led_blue(void)   { stop_animations(); rgb_led_set(0,   0,   255); }
+void rgb_led_white(void)  { stop_animations(); rgb_led_set(255, 255, 255); }
+void rgb_led_yellow(void) { stop_animations(); rgb_led_set(255, 180, 0);   }
+void rgb_led_cyan(void)   { stop_animations(); rgb_led_set(0,   255, 180); }
+void rgb_led_purple(void) { stop_animations(); rgb_led_set(128, 0,   255); }
 
 /* ── HSV → RGB helper ─────────────────────────────────────────────────────── */
 static void hsv_to_rgb(uint16_t hue, uint8_t *r, uint8_t *g, uint8_t *b)
@@ -131,9 +145,7 @@ static void rainbow_task(void *pvParameters)
 
 void rgb_led_rainbow_start(uint32_t step_ms)
 {
-    /* Stop any existing rainbow task first. */
-    rgb_led_rainbow_stop();
-
+    stop_animations();
     s_rainbow_active = true;
     xTaskCreate(rainbow_task, "rainbow", 2048,
                 (void *)(uintptr_t)step_ms, 5, &s_rainbow_task);
@@ -141,9 +153,95 @@ void rgb_led_rainbow_start(uint32_t step_ms)
 
 void rgb_led_rainbow_stop(void)
 {
-    if (s_rainbow_active) {
-        s_rainbow_active = false;
-        /* Give the task time to exit cleanly. */
-        vTaskDelay(pdMS_TO_TICKS(50));
+    if (s_rainbow_active || s_fade_active) {
+        stop_animations();
     }
+}
+
+/* ── LED fade ─────────────────────────────────────────────────────────────── */
+
+typedef struct {
+    float           r, g, b;    /* initial brightness (0–255 float) */
+    rgb_led_curve_t curve;
+    uint32_t        duration_ms;
+    uint32_t        step_ms;
+} fade_params_t;
+
+/* Map normalised time t ∈ [0,1] → normalised brightness ∈ [0,1] per curve. */
+static float eval_curve(rgb_led_curve_t curve, float t)
+{
+    switch (curve) {
+    case RGB_LED_CURVE_LINEAR:
+        return 1.0f - t;
+    case RGB_LED_CURVE_EXPONENTIAL:
+        /* tau chosen so B(1) ≈ 1 % (e^-4.605) */
+        return expf(-4.605f * t);
+    case RGB_LED_CURVE_LOGARITHMIC:
+        /* fast initial drop, slow tail: 1 - ln(1 + 9t)/ln(10) */
+        return 1.0f - (logf(1.0f + 9.0f * t) / logf(10.0f));
+    case RGB_LED_CURVE_SIGMOID:
+        /* S-shaped: slow start, fast middle, slow end */
+        return 1.0f / (1.0f + expf(12.0f * (t - 0.5f)));
+    default:
+        return 1.0f - t;
+    }
+}
+
+static void fade_task(void *pvParameters)
+{
+    fade_params_t *p = (fade_params_t *)pvParameters;
+    float r0 = p->r, g0 = p->g, b0 = p->b;
+    rgb_led_curve_t curve       = p->curve;
+    uint32_t        duration_ms = p->duration_ms;
+    uint32_t        step_ms     = p->step_ms;
+    free(p);
+
+    uint32_t elapsed_ms = 0;
+
+    while (s_fade_active && elapsed_ms <= duration_ms) {
+        float t       = (float)elapsed_ms / (float)duration_ms;
+        float bright  = eval_curve(curve, t);
+
+        rgb_led_set((uint8_t)(r0 * bright),
+                    (uint8_t)(g0 * bright),
+                    (uint8_t)(b0 * bright));
+
+        vTaskDelay(pdMS_TO_TICKS(step_ms));
+        elapsed_ms += step_ms;
+    }
+
+    ledc_set_duty(LEDC_MODE, LEDC_CH_RED,   0);
+    ledc_set_duty(LEDC_MODE, LEDC_CH_GREEN, 0);
+    ledc_set_duty(LEDC_MODE, LEDC_CH_BLUE,  0);
+    ledc_update_duty(LEDC_MODE, LEDC_CH_RED);
+    ledc_update_duty(LEDC_MODE, LEDC_CH_GREEN);
+    ledc_update_duty(LEDC_MODE, LEDC_CH_BLUE);
+
+    s_fade_active = false;
+    s_fade_task   = NULL;
+    vTaskDelete(NULL);
+}
+
+void rgb_led_fade_start(uint8_t r, uint8_t g, uint8_t b,
+                        rgb_led_curve_t curve,
+                        uint32_t duration_ms, uint32_t step_ms)
+{
+    stop_animations();
+
+    fade_params_t *p = malloc(sizeof(fade_params_t));
+    if (!p) return;
+    p->r           = (float)r;
+    p->g           = (float)g;
+    p->b           = (float)b;
+    p->curve       = curve;
+    p->duration_ms = duration_ms;
+    p->step_ms     = step_ms;
+
+    s_fade_active = true;
+    xTaskCreate(fade_task, "led_fade", 2048, p, 5, &s_fade_task);
+}
+
+void rgb_led_fade_stop(void)
+{
+    if (s_fade_active) stop_animations();
 }

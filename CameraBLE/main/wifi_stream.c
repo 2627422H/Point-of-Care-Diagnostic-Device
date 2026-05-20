@@ -120,6 +120,7 @@ esp_err_t wifi_connect(const char *ssid, const char *password, char *out_ip)
 #define MAX_JPEG_SIZE  (800 * 1024)  /* 800 KB – enough for 800×640 Q85 */
 
 static SemaphoreHandle_t s_frame_mutex  = NULL;
+static SemaphoreHandle_t s_frame_ready  = NULL;   /* signalled on every push */
 static uint8_t          *s_frame_buf   = NULL;
 static size_t            s_frame_len   = 0;
 static uint32_t          s_frame_seq   = 0;   /* incremented each push */
@@ -142,6 +143,7 @@ esp_err_t wifi_stream_push_frame(const uint8_t *data, size_t len)
     s_frame_seq++;
     xSemaphoreGive(s_frame_mutex);
 
+    xSemaphoreGive(s_frame_ready);   /* wake any waiting stream handler */
     return ESP_OK;
 }
 
@@ -183,7 +185,8 @@ static esp_err_t stream_handler(httpd_req_t *req)
         xSemaphoreGive(s_frame_mutex);
 
         if (seq == last_seq || len == 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+            /* Block until push_frame signals a new frame (100 ms timeout). */
+            xSemaphoreTake(s_frame_ready, pdMS_TO_TICKS(100));
             continue;
         }
         last_seq = seq;
@@ -222,12 +225,17 @@ static esp_err_t index_handler(httpd_req_t *req)
 esp_err_t wifi_stream_start(void)
 {
     /* Allocate the shared frame buffer. */
-    s_frame_buf = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_frame_buf   = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_frame_mutex = xSemaphoreCreateMutex();
-    if (!s_frame_buf || !s_frame_mutex) {
+    s_frame_ready = xSemaphoreCreateBinary();
+    if (!s_frame_buf || !s_frame_mutex || !s_frame_ready) {
         ESP_LOGE(TAG, "Failed to allocate stream resources");
         return ESP_ERR_NO_MEM;
     }
+
+    /* Disable WiFi power-save so the radio is always on — eliminates the
+     * latency spikes caused by DTIM sleep between beacons. */
+    esp_wifi_set_ps(WIFI_PS_NONE);
     s_frame_len = 0;
     s_frame_seq = 0;
 
@@ -235,7 +243,7 @@ esp_err_t wifi_stream_start(void)
     config.server_port      = 80;
     config.max_uri_handlers = 4;
     /* Allow the stream handler to block in the URI handler task. */
-    config.stack_size       = 8192;
+    config.stack_size       = 16384;
     config.lru_purge_enable = true;
 
     ESP_ERROR_CHECK(httpd_start(&s_httpd, &config));

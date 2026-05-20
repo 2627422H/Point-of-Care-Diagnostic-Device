@@ -35,7 +35,28 @@ void rgb_led_rainbow_start(uint32_t step_ms);
  */
 void rgb_led_rainbow_stop(void);
 
-/** Solid colour shortcuts - each one stops any active rainbow cycle. */
+/** Brightness curve shapes for rgb_led_fade_start(). */
+typedef enum {
+    RGB_LED_CURVE_LINEAR      = 0,  /* constant rate drop to zero          */
+    RGB_LED_CURVE_EXPONENTIAL = 1,  /* fast initial drop, long dim tail    */
+    RGB_LED_CURVE_LOGARITHMIC = 2,  /* very fast initial drop, slow tail   */
+    RGB_LED_CURVE_SIGMOID     = 3,  /* slow start, fast middle, slow end   */
+} rgb_led_curve_t;
+
+/**
+ * Fade the LED from (r,g,b) to black over duration_ms using the chosen curve.
+ * step_ms sets the update interval (e.g. 20 ms = 50 Hz).
+ * Stops any active rainbow or fade before starting.
+ * The curve type and parameters are designed to be driven from the app over BLE.
+ */
+void rgb_led_fade_start(uint8_t r, uint8_t g, uint8_t b,
+                        rgb_led_curve_t curve,
+                        uint32_t duration_ms, uint32_t step_ms);
+
+/** Stop an in-progress fade. LED turns off. */
+void rgb_led_fade_stop(void);
+
+/** Solid colour shortcuts - each one stops any active rainbow or fade. */
 void rgb_led_off(void);
 void rgb_led_red(void);
 void rgb_led_green(void);
