@@ -62,6 +62,7 @@ export default function NewTestScreen() {
     connectStatus,
     bleMode,
     bytesReceived,
+    setBytesReceived,
     useWebViewMode,
     webViewStatus,
     recordingState,
@@ -199,6 +200,7 @@ export default function NewTestScreen() {
                 onFrame={handleWebViewFrame}
                 onError={(msg) => handleWebViewStatus('error: ' + msg)}
                 onStatus={handleWebViewStatus}
+                onBytes={setBytesReceived}
               />
               <View style={styles.streamStats}>
                 <Text style={styles.streamStat}>

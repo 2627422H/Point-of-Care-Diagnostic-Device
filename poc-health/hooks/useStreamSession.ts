@@ -500,7 +500,7 @@ export function useStreamSession() {
   return {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
-    bytesReceived, useWebViewMode, webViewStatus,
+    bytesReceived, setBytesReceived, useWebViewMode, webViewStatus,
     recordingState, recordingProgress, recordingFetching, recordingError, recordingResult,
     start, stop, reset, submitWifiCredentials,
     enableWebView, handleWebViewFrame, handleWebViewStatus,
