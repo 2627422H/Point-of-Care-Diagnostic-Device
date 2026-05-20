@@ -104,7 +104,10 @@ void app_main(void)
     ESP_LOGI(TAG, "MJPEG stream at http://%s/stream", ip);
     rgb_led_green();   /* solid green = streaming ready */
 
-    uint32_t   frame_id  = 0;
+    /* Start at STREAM_EVERY_N-1 so the very first captured frame is pushed
+     * immediately — prevents the snapshot endpoint returning "no frame yet"
+     * before the 1-fps counter first rolls over. */
+    uint32_t   frame_id  = STREAM_EVERY_N - 1;
     TickType_t last_tick = xTaskGetTickCount();
 
     while (1) {
@@ -125,28 +128,28 @@ void app_main(void)
         /* Sample brightness from raw pixels for any active recording session. */
         wifi_stream_record_sample(frame_buf, frame_size);
 
-        jpeg_encode_cfg_t enc_cfg = {
-            .src_type      = JPEG_ENCODE_IN_FORMAT_RGB565,
-            .sub_sample    = JPEG_DOWN_SAMPLING_YUV422,
-            .image_quality = JPEG_QUALITY,
-            .width         = CAM_H_RES,
-            .height        = CAM_V_RES,
-        };
-        uint32_t jpeg_out_size = 0;
-        ret = jpeg_encoder_process(jpeg_enc, &enc_cfg,
-                                   frame_buf, (uint32_t)frame_size,
-                                   jpeg_buf,  (uint32_t)jpeg_buf_alloc_size,
-                                   &jpeg_out_size);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "JPEG encode error: %s", esp_err_to_name(ret));
-            continue;
-        }
-
+        /* Only JPEG-encode and push on the 1-fps tick — saves significant CPU. */
         frame_id++;
         if (frame_id % STREAM_EVERY_N == 0) {
-            ret = wifi_stream_push_frame(jpeg_buf, jpeg_out_size);
-            if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "Stream push failed: %s", esp_err_to_name(ret));
+            jpeg_encode_cfg_t enc_cfg = {
+                .src_type      = JPEG_ENCODE_IN_FORMAT_RGB565,
+                .sub_sample    = JPEG_DOWN_SAMPLING_YUV422,
+                .image_quality = JPEG_QUALITY,
+                .width         = CAM_H_RES,
+                .height        = CAM_V_RES,
+            };
+            uint32_t jpeg_out_size = 0;
+            ret = jpeg_encoder_process(jpeg_enc, &enc_cfg,
+                                       frame_buf, (uint32_t)frame_size,
+                                       jpeg_buf,  (uint32_t)jpeg_buf_alloc_size,
+                                       &jpeg_out_size);
+            if (ret == ESP_OK) {
+                ret = wifi_stream_push_frame(jpeg_buf, jpeg_out_size);
+                if (ret != ESP_OK) {
+                    ESP_LOGW(TAG, "Stream push failed: %s", esp_err_to_name(ret));
+                }
+            } else {
+                ESP_LOGE(TAG, "JPEG encode error: %s", esp_err_to_name(ret));
             }
         }
     }
