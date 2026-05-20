@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveRecordingRun } from '../store/useRecordingStore';
+import { fitDecay } from '../utils/estrogenCalibration';
 import { Platform, PermissionsAndroid } from 'react-native';
 
 export type StreamPhase =
@@ -494,8 +495,9 @@ export function useStreamSession() {
                   return { t, b };
                 });
               }
+              const { estimatedEstrogen } = fitDecay(brightnessData);
               setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData });
-              saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData });
+              saveRecordingRun({ id: Date.now().toString(), timestamp: Date.now(), curve, durationMs: duration, framesCapured, brightnessData, estimatedEstrogen });
               setRecordingState('done');
             })
             .catch(() => {

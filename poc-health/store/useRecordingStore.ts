@@ -8,6 +8,7 @@ export interface RecordingRun {
   durationMs: number;
   framesCapured: number;
   brightnessData: { t: number; b: number }[];
+  estimatedEstrogen?: number;  // pg/ml derived from decay fit
 }
 
 export const CURVE_LABELS: Record<0 | 1 | 2 | 3, string> = {

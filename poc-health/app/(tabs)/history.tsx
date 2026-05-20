@@ -13,6 +13,7 @@ import { LineChart } from 'react-native-chart-kit';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { useRecordingStore, deleteRecordingRun, CURVE_LABELS, type RecordingRun } from '../../store/useRecordingStore';
+import { estrogenBand } from '../../utils/estrogenCalibration';
 import BrightnessChart from '../../components/BrightnessChart';
 import type { TestResult } from '../../types';
 
@@ -249,6 +250,14 @@ function RecordingRunRow({ run }: { run: RecordingRun }) {
         <View style={styles.rowLeft}>
           <Text style={styles.rowDate}>{date}</Text>
           <Text style={styles.rowCycleDay}>{CURVE_LABELS[run.curve]} · {(run.durationMs / 1000).toFixed(1)}s · {run.framesCapured} frames</Text>
+          {run.estimatedEstrogen != null && run.estimatedEstrogen > 0 && (() => {
+            const band = estrogenBand(run.estimatedEstrogen);
+            return (
+              <Text style={[styles.rowCycleDay, { color: band.color, fontWeight: '600' }]}>
+                {run.estimatedEstrogen} pg/ml — {band.label}
+              </Text>
+            );
+          })()}
         </View>
         <TouchableOpacity
           onPress={() => deleteRecordingRun(run.id)}
