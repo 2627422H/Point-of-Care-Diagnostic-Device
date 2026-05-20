@@ -9,98 +9,61 @@ interface Props {
   onBytes?: (total: number) => void;
 }
 
-// Convert Uint8Array to base64 in 8 KB chunks to avoid spread-operator stack limits.
-function toBase64(bytes: Uint8Array): string {
-  const CHUNK = 8192;
-  let s = '';
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    s += String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
-  }
-  return btoa(s);
-}
-
+// Polls /snapshot every 100 ms (10 fps).
+// React Native's native Image loader fetches plain JPEG over HTTP with no
+// CORS or ATS issues — no WebView, no streaming parser needed.
+// streamUrl is e.g. http://192.168.x.x/stream; we replace /stream → /snapshot.
 export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus, onBytes }: Props) {
-  const [uri, setUri] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const [reachable, setReachable] = useState(false);
   const liveRef = useRef(true);
-  const lastFrameMs = useRef(0);
   const totalBytesRef = useRef(0);
+  const snapshotBase = streamUrl.replace('/stream', '/snapshot');
 
   useEffect(() => {
     liveRef.current = true;
+    totalBytesRef.current = 0;
+    setReachable(false);
+    setTick(0);
+
+    onStatus?.('Connecting…');
+
+    // Probe once to confirm the device is reachable before starting the poll loop.
     const ctrl = new AbortController();
-
-    (async () => {
-      try {
-        onStatus?.('Connecting…');
-        const res = await fetch(streamUrl, { signal: ctrl.signal });
-        if (!res.body) { if (liveRef.current) onError?.('No stream body'); return; }
-        if (liveRef.current) onStatus?.('Stream connected');
-
-        const reader = res.body.getReader();
-        // 2 MB working buffer; doubled if needed.
-        let buf = new Uint8Array(2 * 1024 * 1024);
-        let len = 0;
-
-        while (liveRef.current) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (!value?.length) continue;
-
-          // Grow buffer if needed.
-          if (len + value.length > buf.length) {
-            const next = new Uint8Array(Math.max(buf.length * 2, len + value.length));
-            next.set(buf.subarray(0, len));
-            buf = next;
-          }
-          buf.set(value, len);
-          len += value.length;
-          totalBytesRef.current += value.length;
-          onBytes?.(totalBytesRef.current);
-
-          // Find the last JPEG EOI marker (FF D9) in the buffer.
-          let eoi = -1;
-          for (let i = len - 2; i >= 0; i--) {
-            if (buf[i] === 0xFF && buf[i + 1] === 0xD9) { eoi = i + 2; break; }
-          }
-          if (eoi === -1) continue;
-
-          // Find the SOI marker (FF D8) before that EOI.
-          let soi = -1;
-          for (let i = eoi - 4; i >= 0; i--) {
-            if (buf[i] === 0xFF && buf[i + 1] === 0xD8) { soi = i; break; }
-          }
-
-          if (soi !== -1) {
-            // Throttle display to ~15 fps so JS thread stays responsive.
-            const now = Date.now();
-            if (now - lastFrameMs.current >= 66) {
-              lastFrameMs.current = now;
-              const jpeg = buf.subarray(soi, eoi).slice();
-              const dataUri = `data:image/jpeg;base64,${toBase64(jpeg)}`;
-              if (liveRef.current) {
-                setUri(dataUri);
-                onFrame?.(128); // brightness placeholder; real values after firmware reflash
-              }
-            }
-          }
-
-          // Retain only bytes after the EOI (start of next frame).
-          const remaining = len - eoi;
-          if (remaining > 0) buf.copyWithin(0, eoi, len);
-          len = Math.max(0, remaining);
+    fetch(`${snapshotBase}?t=probe`, { signal: ctrl.signal })
+      .then((res) => {
+        if (!liveRef.current) return;
+        if (!res.ok) { onError?.(`Device returned HTTP ${res.status}`); return; }
+        // Rough byte count from Content-Length header if present.
+        const cl = res.headers.get('content-length');
+        if (cl) { totalBytesRef.current += parseInt(cl, 10); onBytes?.(totalBytesRef.current); }
+        onStatus?.('Stream connected');
+        setReachable(true);
+      })
+      .catch((e) => {
+        if (liveRef.current && e?.name !== 'AbortError') {
+          onError?.(`Cannot reach device: ${e?.message ?? 'network error'}`);
         }
-      } catch (e: any) {
-        if (e?.name !== 'AbortError' && liveRef.current) {
-          onError?.(`Stream error: ${e?.message ?? 'unknown'}`);
-        }
-      }
-    })();
+      });
 
     return () => {
       liveRef.current = false;
       ctrl.abort();
     };
   }, [streamUrl]);
+
+  // Tick loop — only runs once reachable is confirmed.
+  useEffect(() => {
+    if (!reachable) return;
+    const id = setInterval(() => {
+      if (!liveRef.current) return;
+      setTick((t) => t + 1);
+      onFrame?.(128);
+    }, 100);
+    return () => clearInterval(id);
+  }, [reachable]);
+
+  const uri = reachable ? `${snapshotBase}?t=${tick}` : null;
 
   return (
     <View style={styles.container}>
@@ -110,6 +73,7 @@ export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus, onB
           style={styles.image}
           resizeMode="contain"
           fadeDuration={0}
+          onError={(e) => onError?.(e.nativeEvent.error)}
         />
       )}
     </View>

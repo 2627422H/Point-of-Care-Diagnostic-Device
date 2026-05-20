@@ -285,6 +285,41 @@ static esp_err_t record_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, resp);
 }
 
+/* HTTP handler for GET /snapshot – returns the latest JPEG frame.
+ * React Native's Image component polls this; each request completes quickly
+ * so the httpd is never blocked long-term. */
+static esp_err_t snapshot_handler(httpd_req_t *req)
+{
+    if (!s_frame_buf || !s_frame_mutex) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Not ready");
+        return ESP_FAIL;
+    }
+
+    uint8_t *local = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!local) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
+    size_t len = s_frame_len;
+    if (len > 0) memcpy(local, s_frame_buf, len);
+    xSemaphoreGive(s_frame_mutex);
+
+    if (len == 0) {
+        free(local);
+        httpd_resp_send_err(req, HTTPD_503_SERVICE_UNAVAILABLE, "No frame yet");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t ret = httpd_resp_send(req, (const char *)local, (ssize_t)len);
+    free(local);
+    return ret;
+}
+
 /* HTTP handler for GET / – full-screen MJPEG viewer with RN bridge messaging */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -387,6 +422,13 @@ esp_err_t wifi_stream_start(void)
     };
     httpd_register_uri_handler(s_httpd, &record_uri);
 
-    ESP_LOGI(TAG, "HTTP server started. Stream at http://<ip>/stream");
+    httpd_uri_t snapshot_uri = {
+        .uri     = "/snapshot",
+        .method  = HTTP_GET,
+        .handler = snapshot_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &snapshot_uri);
+
+    ESP_LOGI(TAG, "HTTP server started. Stream at http://<ip>/stream  Snapshot at http://<ip>/snapshot");
     return ESP_OK;
 }
