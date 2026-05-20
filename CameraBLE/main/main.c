@@ -145,7 +145,10 @@ void app_main(void)
                                        &jpeg_out_size);
             if (ret == ESP_OK) {
                 ret = wifi_stream_push_frame(jpeg_buf, jpeg_out_size);
-                if (ret != ESP_OK) {
+                if (ret == ESP_OK) {
+                    ESP_LOGI(TAG, "Frame %lu: %lu bytes",
+                             (unsigned long)frame_id, (unsigned long)jpeg_out_size);
+                } else {
                     ESP_LOGW(TAG, "Stream push failed: %s", esp_err_to_name(ret));
                 }
             } else {
