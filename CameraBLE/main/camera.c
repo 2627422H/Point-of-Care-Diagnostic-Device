@@ -31,39 +31,28 @@ static const char *TAG = "camera";
 #define LDO_CHAN_ID             3
 #define LDO_VOLTAGE_MV          2500
 
-/* GPIO7 = SDA, GPIO8 = SCL — matches the mipi_isp_dsi example config */
 #define I2C_SDA_GPIO            7
 #define I2C_SCL_GPIO            8
 #define SCCB_FREQ_HZ            (10 * 1000)
 
-#define CSI_LANE_BITRATE_MBPS   400   /* OV5647: IDI_CLK=100 MHz × 4 = 400 Mbps/lane */
+#define CSI_LANE_BITRATE_MBPS   400
 #define CAM_FORMAT_NAME         "MIPI_2lane_24Minput_RAW8_800x640_50fps"
 
 /* ── Module state ─────────────────────────────────────────────────────────── */
 static esp_cam_ctlr_handle_t    s_cam_handle   = NULL;
 static isp_proc_handle_t        s_isp_proc     = NULL;
 
-/*
- * Double-buffer design:
- *   s_cap_buf  – DMA writes the next captured frame here (given to controller).
- *   s_proc_buf – the last completed frame; safe to read/encode here.
- *
- * Swap happens atomically inside on_trans_finished (ISR context).
- */
 static uint8_t *s_cap_buf   = NULL;
 static uint8_t *s_proc_buf  = NULL;
 static esp_cam_sensor_device_t *s_sensor = NULL;
 
-/* Binary semaphore: given by on_trans_finished (ISR), taken by camera_capture_frame. */
 static SemaphoreHandle_t s_frame_sem = NULL;
 
-/* Debug counters incremented in ISR context. */
 static volatile uint32_t s_isr_count       = 0;
 static volatile uint32_t s_get_trans_count = 0;
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-/* IRAM_ATTR required: called from DMA ISR (csi_dma_trans_done_callback). */
 static bool IRAM_ATTR on_get_new_trans(esp_cam_ctlr_handle_t handle,
                                        esp_cam_ctlr_trans_t *trans, void *user_data)
 {
@@ -78,8 +67,6 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t handle,
                                         void *user_data)
 {
     s_isr_count++;
-
-    /* Swap buffers: s_proc_buf now holds the just-completed frame. */
     uint8_t *tmp = s_cap_buf;
     s_cap_buf    = s_proc_buf;
     s_proc_buf   = tmp;
@@ -89,7 +76,6 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t handle,
     return (bool)higher_woken;
 }
 
-/* Scan the registered sensor drivers array and detect whichever responds. */
 static esp_cam_sensor_device_t *detect_sensor(esp_sccb_io_handle_t *out_sccb,
                                               i2c_master_bus_handle_t i2c_bus)
 {
@@ -106,8 +92,8 @@ static esp_cam_sensor_device_t *detect_sensor(esp_sccb_io_handle_t *out_sccb,
          p < &__esp_cam_sensor_detect_fn_array_end; ++p) {
 
         sccb_i2c_config_t i2c_cfg = {
-            .scl_speed_hz   = SCCB_FREQ_HZ,
-            .device_address = p->sccb_addr,
+            .scl_speed_hz    = SCCB_FREQ_HZ,
+            .device_address  = p->sccb_addr,
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         };
         ESP_ERROR_CHECK(sccb_new_i2c_io(i2c_bus, &i2c_cfg, &cam_cfg.sccb_handle));
@@ -118,7 +104,6 @@ static esp_cam_sensor_device_t *detect_sensor(esp_sccb_io_handle_t *out_sccb,
             *out_sccb = cam_cfg.sccb_handle;
             return cam;
         }
-        /* This address didn't respond – release and try next. */
         esp_sccb_del_i2c_io(cam_cfg.sccb_handle);
     }
     return NULL;
@@ -130,7 +115,7 @@ esp_err_t camera_init(void)
 {
     esp_err_t ret;
 
-    /* 1 ── LDO for MIPI PHY ------------------------------------------------ */
+    /* 1 -- LDO for MIPI PHY ----------------------------------------------- */
     esp_ldo_channel_handle_t ldo_handle = NULL;
     esp_ldo_channel_config_t ldo_cfg = {
         .chan_id    = LDO_CHAN_ID,
@@ -139,7 +124,7 @@ esp_err_t camera_init(void)
     ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_cfg, &ldo_handle));
     ESP_LOGI(TAG, "MIPI PHY LDO ch%d = %d mV", LDO_CHAN_ID, LDO_VOLTAGE_MV);
 
-    /* 2 ── Allocate two frame buffers in PSRAM (64-byte aligned) ----------- */
+    /* 2 -- Allocate two frame buffers in PSRAM ----------------------------- */
     s_cap_buf = (uint8_t *)heap_caps_aligned_alloc(
                     CAM_FRAME_BUF_ALIGN, CAM_FRAME_BUF_SIZE,
                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -157,15 +142,14 @@ esp_err_t camera_init(void)
     ESP_LOGI(TAG, "Frame buffers @ cap=%p proc=%p (%u bytes each)",
              s_cap_buf, s_proc_buf, CAM_FRAME_BUF_SIZE);
 
-    /* Allow the MIPI PHY power rail to stabilise before I2C traffic. */
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    /* 3 ── Camera sensor via I2C / SCCB ------------------------------------ */
+    /* 3 -- I2C / SCCB ----------------------------------------------------- */
     i2c_master_bus_config_t i2c_bus_cfg = {
-        .clk_source              = I2C_CLK_SRC_DEFAULT,
-        .sda_io_num              = I2C_SDA_GPIO,
-        .scl_io_num              = I2C_SCL_GPIO,
-        .i2c_port                = I2C_NUM_0,
+        .clk_source                   = I2C_CLK_SRC_DEFAULT,
+        .sda_io_num                   = I2C_SDA_GPIO,
+        .scl_io_num                   = I2C_SCL_GPIO,
+        .i2c_port                     = I2C_NUM_0,
         .flags.enable_internal_pullup = true,
     };
     i2c_master_bus_handle_t i2c_bus = NULL;
@@ -179,7 +163,7 @@ esp_err_t camera_init(void)
     }
     ESP_LOGI(TAG, "Camera sensor detected");
 
-    /* Select the desired capture format. */
+    /* Select capture format */
     esp_cam_sensor_format_array_t fmt_array = {0};
     esp_cam_sensor_query_format(s_sensor, &fmt_array);
 
@@ -191,71 +175,100 @@ esp_err_t camera_init(void)
         }
     }
     if (!chosen) {
-        ESP_LOGE(TAG, "Format '%s' not found — available formats logged above", CAM_FORMAT_NAME);
+        ESP_LOGE(TAG, "Format '%s' not found", CAM_FORMAT_NAME);
         return ESP_ERR_INVALID_ARG;
     }
-
     ESP_ERROR_CHECK(esp_cam_sensor_set_format(s_sensor, chosen));
     ESP_LOGI(TAG, "Sensor format set: %s", chosen->name);
 
     /*
-     * Put the OV5647 into full auto mode:
-     *   0x3503 = 0x00  → AEC and AGC both in auto
-     *   0x3406 = 0x00  → AWB gain in auto
+     * OV5647 exposure / gain registers:
      *
-     * NOTE: We intentionally do NOT touch the gain-ceiling registers
-     * (0x3a18/0x3a19) so the sensor uses its own default ceiling.
-     * Let the ISP AWB pipeline handle white-balance instead of fighting
-     * against manual sensor gain registers.
+     *   0x3503 = 0x00  -> AEC and AGC fully automatic
+     *   0x3406 = 0x00  -> AWB automatic
+     *
+     *   0x3a18/0x3a19  -> AEC gain ceiling (max auto gain).
+     *                     Default is very low (0x00/0x08 = 8x).
+     *                     Raise to 0x00/0xf8 = 248x to allow the sensor
+     *                     to brighten dark scenes automatically.
+     *
+     *   0x350a/0x350b  -> Manual gain registers (only used when AGC=manual).
+     *                     Not needed here since AGC is auto, but writing
+     *                     0x00/0x3f sets a sensible starting point (16x).
+     *
+     * NOTE: The image is currently dark because the default gain ceiling
+     * is too restrictive. Raising it lets the sensor expose brighter.
      */
     esp_cam_sensor_reg_val_t rv;
-    rv.regaddr = 0x3503; rv.value = 0x00;   /* AEC/AGC auto */
-    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
-    rv.regaddr = 0x3406; rv.value = 0x00;   /* AWB auto */
-    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
-    ESP_LOGI(TAG, "Sensor: auto AEC/AGC/AWB");
 
-    /* 4 ── ISP processor (must come before CSI and sensor streaming) ------- */
+    /* Full auto AEC + AGC */
+    rv.regaddr = 0x3503; rv.value = 0x00;
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+
+    /* Full auto AWB */
+    rv.regaddr = 0x3406; rv.value = 0x00;
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+
+    /* Raise AEC gain ceiling to 248x so dark scenes can be exposed properly */
+    rv.regaddr = 0x3a18; rv.value = 0x00;
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    rv.regaddr = 0x3a19; rv.value = 0xf8;
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+
+    /* Set minimum exposure lines to avoid underexposure floor */
+    rv.regaddr = 0x3a0f; rv.value = 0x50;   /* AEC stable range high limit */
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    rv.regaddr = 0x3a10; rv.value = 0x48;   /* AEC stable range low limit  */
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    rv.regaddr = 0x3a1b; rv.value = 0x50;   /* AEC fast zone high          */
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    rv.regaddr = 0x3a1e; rv.value = 0x48;   /* AEC fast zone low           */
+    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+
+    ESP_LOGI(TAG, "Sensor: auto AEC/AGC/AWB, gain ceiling 248x");
+
+    /* 4 -- ISP processor -------------------------------------------------- */
     esp_isp_processor_cfg_t isp_cfg = {
-        .clk_hz                = 80 * 1000 * 1000,
-        .input_data_source     = ISP_INPUT_DATA_SOURCE_CSI,
-        .input_data_color_type = ISP_COLOR_RAW8,
-        .output_data_color_type= ISP_COLOR_RGB565,
-        /*
-         * FIX: OV5647 uses GBRG Bayer order, not BGGR.
-         * Using the wrong order causes all colour channels to be
-         * demosaiced incorrectly, producing a grey/desaturated image.
-         */
-        .bayer_order           = COLOR_RAW_ELEMENT_ORDER_GBRG,
-        .has_line_start_packet = false,
-        .has_line_end_packet   = false,
-        .h_res                 = CAM_H_RES,
-        .v_res                 = CAM_V_RES,
+        .clk_hz                 = 80 * 1000 * 1000,
+        .input_data_source      = ISP_INPUT_DATA_SOURCE_CSI,
+        .input_data_color_type  = ISP_COLOR_RAW8,
+        .output_data_color_type = ISP_COLOR_RGB565,
+        .has_line_start_packet  = false,
+        .has_line_end_packet    = false,
+        .h_res                  = CAM_H_RES,
+        .v_res                  = CAM_V_RES,
     };
     ESP_ERROR_CHECK(esp_isp_new_processor(&isp_cfg, &s_isp_proc));
     ESP_ERROR_CHECK(esp_isp_enable(s_isp_proc));
     ESP_LOGI(TAG, "ISP enabled");
 
-    /* 4a ── ISP: White Balance Gain ---------------------------------------- */
-    esp_isp_wbg_config_t awb_cfg = {0};
-    ret = esp_isp_wbg_configure(s_isp_proc, &awb_cfg);
+    /*
+     * Demosaic: converts RAW8 Bayer to RGB. Must be explicitly enabled —
+     * without this the output is greyscale.
+     */
+    esp_isp_demosaic_config_t demosaic_cfg = {
+        .grad_ratio = { .integer = 2, .decimal = 5 },
+    };
+    ret = esp_isp_demosaic_configure(s_isp_proc, &demosaic_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WBG configure failed (%s), continuing without WBG", esp_err_to_name(ret));
-    } else {
-        ret = esp_isp_wbg_enable(s_isp_proc);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "WBG enable failed (%s)", esp_err_to_name(ret));
-        } else {
-            ESP_LOGI(TAG, "ISP white balance gain enabled");
-        }
+        ESP_LOGE(TAG, "Demosaic configure failed: %s", esp_err_to_name(ret));
+        return ret;
     }
+    ESP_ERROR_CHECK(esp_isp_demosaic_enable(s_isp_proc));
+    ESP_LOGI(TAG, "ISP demosaic enabled");
 
-    /* 4b ── ISP: Colour / contrast / saturation ---------------------------- */
+    /*
+     * Colour correction: boost brightness and saturation slightly to
+     * compensate for the sensor's tendency to underexpose indoors.
+     *   brightness: -127..127, positive = brighter
+     *   saturation: 0..255, 128 = neutral, 160 = slightly vivid
+     *   contrast:   0..255, 128 = neutral
+     */
     esp_isp_color_config_t color_cfg = {
-        .color_contrast   = { .val = 128 },   /* neutral – adjust 0-255 to taste */
-        .color_saturation = { .val = 128 },   /* neutral – increase for vivid colour */
+        .color_contrast   = { .val = 128 },
+        .color_saturation = { .val = 150 },
         .color_hue        = 0,
-        .color_brightness = 0,
+        .color_brightness = 20,             /* lift shadows */
     };
     ret = esp_isp_color_configure(s_isp_proc, &color_cfg);
     if (ret != ESP_OK) {
@@ -269,20 +282,20 @@ esp_err_t camera_init(void)
         }
     }
 
-    /* 4c ── ISP: Sharpening skipped (struct layout varies by ESP-IDF version) */
-    ESP_LOGI(TAG, "ISP sharpening not configured (add manually if needed)");
+    /* NOTE: WBG (white balance gain) is NOT supported on ESP32-P4 < v3.0.
+     * It is intentionally omitted here to avoid the "not supported" warning. */
 
-    /* 5 ── MIPI-CSI controller (after ISP, before sensor streaming) -------- */
+    /* 5 -- MIPI-CSI controller -------------------------------------------- */
     esp_cam_ctlr_csi_config_t csi_cfg = {
-        .ctlr_id               = 0,
-        .h_res                 = CAM_H_RES,
-        .v_res                 = CAM_V_RES,
-        .lane_bit_rate_mbps    = CSI_LANE_BITRATE_MBPS,
-        .input_data_color_type = CAM_CTLR_COLOR_RAW8,
-        .output_data_color_type= CAM_CTLR_COLOR_RGB565,
-        .data_lane_num         = 2,
-        .byte_swap_en          = false,
-        .queue_items           = 1,
+        .ctlr_id                = 0,
+        .h_res                  = CAM_H_RES,
+        .v_res                  = CAM_V_RES,
+        .lane_bit_rate_mbps     = CSI_LANE_BITRATE_MBPS,
+        .input_data_color_type  = CAM_CTLR_COLOR_RAW8,
+        .output_data_color_type = CAM_CTLR_COLOR_RGB565,
+        .data_lane_num          = 2,
+        .byte_swap_en           = false,
+        .queue_items            = 1,
     };
     ret = esp_cam_new_csi_ctlr(&csi_cfg, &s_cam_handle);
     if (ret != ESP_OK) {
@@ -298,7 +311,7 @@ esp_err_t camera_init(void)
     ESP_ERROR_CHECK(esp_cam_ctlr_enable(s_cam_handle));
     ESP_LOGI(TAG, "CSI controller enabled");
 
-    /* 6 ── Create semaphore and start CSI before streaming sensor ---------- */
+    /* 6 -- Semaphore + start CSI ------------------------------------------ */
     s_frame_sem = xSemaphoreCreateBinary();
     if (!s_frame_sem) {
         ESP_LOGE(TAG, "Failed to create frame semaphore");
@@ -312,7 +325,7 @@ esp_err_t camera_init(void)
     }
     ESP_LOGI(TAG, "CSI controller started");
 
-    /* 7 ── NOW start sensor streaming (CSI receiver is ready and listening) */
+    /* 7 -- Start sensor streaming ----------------------------------------- */
     int stream_en = 1;
     ret = esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &stream_en);
     if (ret != ESP_OK) {
@@ -321,36 +334,46 @@ esp_err_t camera_init(void)
     }
     ESP_LOGI(TAG, "Sensor streaming");
 
-    /* Let the OV5647's internal AE/AGC loop converge before the first real
-     * capture.  At 50 fps it takes ~20-50 frames (~1 s) to stabilise. */
+    /* Wait for AE/AGC to converge (~1.5 s at 50 fps) */
     ESP_LOGI(TAG, "Waiting 1.5 s for sensor AE to settle...");
     vTaskDelay(pdMS_TO_TICKS(1500));
 
-    ESP_LOGI(TAG, "Camera pipeline running – %dx%d RGB565 @ 50fps sensor rate",
+    ESP_LOGI(TAG, "Camera ready -- %dx%d RGB565 @ 50fps sensor, streamed at 10fps",
              CAM_H_RES, CAM_V_RES);
-    ESP_LOGI(TAG, "Init complete: get_trans_count=%lu isr_count=%lu",
-             (unsigned long)s_get_trans_count, (unsigned long)s_isr_count);
     return ESP_OK;
+}
+
+esp_err_t camera_lock_exposure(void)
+{
+    if (!s_sensor) return ESP_ERR_INVALID_STATE;
+    /* OV5647 reg 0x3503: bit0=AEC manual, bit1=AGC manual.
+     * Setting 0x07 freezes AEC + AGC at their current auto-converged values. */
+    esp_cam_sensor_reg_val_t rv = { .regaddr = 0x3503, .value = 0x07 };
+    esp_err_t ret = esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    if (ret == ESP_OK) ESP_LOGI(TAG, "Exposure locked (manual AEC+AGC)");
+    return ret;
+}
+
+esp_err_t camera_unlock_exposure(void)
+{
+    if (!s_sensor) return ESP_ERR_INVALID_STATE;
+    esp_cam_sensor_reg_val_t rv = { .regaddr = 0x3503, .value = 0x00 };
+    esp_err_t ret = esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_REG, &rv);
+    if (ret == ESP_OK) ESP_LOGI(TAG, "Exposure unlocked (auto AEC+AGC)");
+    return ret;
 }
 
 esp_err_t camera_capture_frame(const uint8_t **frame_buf, size_t *frame_size)
 {
-    /* Drain any semaphore count left from a previous (unconsumed) frame. */
     xSemaphoreTake(s_frame_sem, 0);
 
-    ESP_LOGI(TAG, "Waiting for frame (isr_count=%lu get_trans_count=%lu)",
-             (unsigned long)s_isr_count, (unsigned long)s_get_trans_count);
-
-    /* Wait up to 2 s for on_trans_finished to give the semaphore. */
     if (xSemaphoreTake(s_frame_sem, pdMS_TO_TICKS(2000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Timeout waiting for camera frame (isr_count=%lu get_trans_count=%lu)",
+        ESP_LOGE(TAG, "Timeout waiting for camera frame (isr=%lu get=%lu)",
                  (unsigned long)s_isr_count, (unsigned long)s_get_trans_count);
         return ESP_ERR_TIMEOUT;
     }
 
-    /* s_proc_buf now holds the completed frame – flush CPU cache. */
     esp_cache_msync(s_proc_buf, CAM_FRAME_BUF_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
-
     *frame_buf  = s_proc_buf;
     *frame_size = CAM_FRAME_BUF_SIZE;
     return ESP_OK;

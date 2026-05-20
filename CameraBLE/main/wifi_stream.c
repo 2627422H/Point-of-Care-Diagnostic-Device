@@ -1,12 +1,16 @@
 #include "wifi_stream.h"
+#include "rgb_led.h"
+#include "camera.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -18,7 +22,7 @@ static const char *TAG = "wifi_stream";
 /* ── WiFi connection ──────────────────────────────────────────────────────── */
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAIL_BIT       BIT1
-#define WIFI_MAX_RETRIES    5
+#define WIFI_MAX_RETRIES    10
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static int                s_retry_count      = 0;
@@ -29,11 +33,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "Disconnected: reason=%d (%s)", disc->reason,
+                 disc->reason == 2   ? "AUTH_EXPIRE" :
+                 disc->reason == 15  ? "4WAY_HANDSHAKE_TIMEOUT (wrong password?)" :
+                 disc->reason == 201 ? "NO_AP_FOUND (SSID not visible)" :
+                 disc->reason == 202 ? "AUTH_FAIL (wrong password or auth mode)" :
+                 disc->reason == 203 ? "ASSOC_FAIL" :
+                 disc->reason == 204 ? "HANDSHAKE_TIMEOUT" : "other");
         if (s_retry_count < WIFI_MAX_RETRIES) {
             esp_wifi_connect();
             s_retry_count++;
-            ESP_LOGW(TAG, "WiFi disconnected, retrying (%d/%d)...",
-                     s_retry_count, WIFI_MAX_RETRIES);
+            ESP_LOGW(TAG, "Retrying (%d/%d)...", s_retry_count, WIFI_MAX_RETRIES);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
@@ -70,7 +81,14 @@ esp_err_t wifi_connect(const char *ssid, const char *password, char *out_ip)
     wifi_config_t wifi_cfg = {0};
     strncpy((char *)wifi_cfg.sta.ssid,     ssid,     sizeof(wifi_cfg.sta.ssid) - 1);
     strncpy((char *)wifi_cfg.sta.password, password, sizeof(wifi_cfg.sta.password) - 1);
-    wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_cfg.sta.threshold.authmode  = WIFI_AUTH_WPA_PSK;
+    wifi_cfg.sta.sae_pwe_h2e         = WPA3_SAE_PWE_BOTH;
+    wifi_cfg.sta.pmf_cfg.capable     = true;
+    wifi_cfg.sta.pmf_cfg.required    = false;
+    /* Scan all channels on both bands before connecting — prevents NO_AP_FOUND
+     * when the hotspot is on a non-default channel or band. */
+    wifi_cfg.sta.scan_method         = WIFI_ALL_CHANNEL_SCAN;
+    wifi_cfg.sta.sort_method         = WIFI_CONNECT_AP_BY_SIGNAL;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
@@ -78,10 +96,11 @@ esp_err_t wifi_connect(const char *ssid, const char *password, char *out_ip)
 
     ESP_LOGI(TAG, "Connecting to SSID: %s", ssid);
 
+    /* 30 s — hotspots (especially phones) can take longer to accept a station. */
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdFALSE, pdFALSE,
-                                           pdMS_TO_TICKS(15000));
+                                           pdMS_TO_TICKS(30000));
 
     if (bits & WIFI_CONNECTED_BIT) {
         esp_netif_ip_info_t ip_info;
@@ -120,11 +139,62 @@ esp_err_t wifi_connect(const char *ssid, const char *password, char *out_ip)
 #define MAX_JPEG_SIZE  (800 * 1024)  /* 800 KB – enough for 800×640 Q85 */
 
 static SemaphoreHandle_t s_frame_mutex  = NULL;
+static SemaphoreHandle_t s_frame_ready  = NULL;   /* signalled on every push */
 static uint8_t          *s_frame_buf   = NULL;
 static size_t            s_frame_len   = 0;
 static uint32_t          s_frame_seq   = 0;   /* incremented each push */
 
 static httpd_handle_t    s_httpd       = NULL;
+
+/* ── Recording session ────────────────────────────────────────────────────── */
+#define MAX_RECORD_FRAMES  600   /* 60 s at 10 fps */
+
+static volatile bool s_rec_active  = false;
+static uint32_t      s_rec_start_ms = 0;
+static uint16_t      s_rec_brightness[MAX_RECORD_FRAMES];
+static uint32_t      s_rec_timestamps[MAX_RECORD_FRAMES];
+static int           s_rec_count   = 0;
+
+/* Sample ~1024 evenly-spaced pixels from a raw RGB565 frame and return mean
+ * luma (0–255).  Called from the capture task — must be fast. */
+static uint8_t brightness_from_rgb565(const uint8_t *buf, size_t len)
+{
+    size_t n_pixels = len / 2;
+    size_t step = n_pixels / 1024;
+    if (step < 1) step = 1;
+
+    uint32_t sum   = 0;
+    uint32_t count = 0;
+    for (size_t i = 0; i < n_pixels; i += step) {
+        /* RGB565 big-endian: RRRRRGGG GGGBBBBB */
+        uint16_t px = ((uint16_t)buf[i * 2] << 8) | buf[i * 2 + 1];
+        uint32_t r  = (px >> 11) & 0x1F;   /* 0-31 */
+        uint32_t g  = (px >>  5) & 0x3F;   /* 0-63 */
+        uint32_t b  =  px        & 0x1F;   /* 0-31 */
+        /* Scale to 8-bit and apply BT.601 luma weights */
+        sum += (r * 8 * 299 + g * 4 * 587 + b * 8 * 114) / 1000;
+        count++;
+    }
+    return count > 0 ? (uint8_t)(sum / count) : 0;
+}
+
+void wifi_stream_record_sample(const uint8_t *rgb565, size_t len)
+{
+    if (!s_rec_active || s_rec_count >= MAX_RECORD_FRAMES) return;
+    uint32_t ts = (uint32_t)(esp_timer_get_time() / 1000) - s_rec_start_ms;
+    s_rec_timestamps[s_rec_count] = ts;
+    s_rec_brightness[s_rec_count] = brightness_from_rgb565(rgb565, len);
+    s_rec_count++;
+}
+
+static void rec_stop_task(void *arg)
+{
+    uint32_t delay_ms = *(uint32_t *)arg;
+    free(arg);
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    s_rec_active = false;
+    vTaskDelete(NULL);
+}
 
 esp_err_t wifi_stream_push_frame(const uint8_t *data, size_t len)
 {
@@ -142,6 +212,7 @@ esp_err_t wifi_stream_push_frame(const uint8_t *data, size_t len)
     s_frame_seq++;
     xSemaphoreGive(s_frame_mutex);
 
+    xSemaphoreGive(s_frame_ready);   /* wake any waiting stream handler */
     return ESP_OK;
 }
 
@@ -183,7 +254,8 @@ static esp_err_t stream_handler(httpd_req_t *req)
         xSemaphoreGive(s_frame_mutex);
 
         if (seq == last_seq || len == 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+            /* Block until push_frame signals a new frame (100 ms timeout). */
+            xSemaphoreTake(s_frame_ready, pdMS_TO_TICKS(100));
             continue;
         }
         last_seq = seq;
@@ -207,35 +279,221 @@ static esp_err_t stream_handler(httpd_req_t *req)
     return ret;
 }
 
-/* HTTP handler for GET / – simple status page */
+static void ae_unlock_task(void *arg)
+{
+    uint32_t delay_ms = *(uint32_t *)arg;
+    free(arg);
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    camera_unlock_exposure();
+    vTaskDelete(NULL);
+}
+
+/* HTTP handler for GET /record?curve=<0-3>&r=<0-255>&g=<0-255>&b=<0-255>
+ *                              &duration=<ms>&step=<ms>
+ *
+ * Triggers an LED fade and returns JSON with the session parameters so the
+ * Python script can timestamp the recording window.
+ *
+ * curve: 0=linear  1=exponential  2=logarithmic  3=sigmoid
+ */
+static esp_err_t record_handler(httpd_req_t *req)
+{
+    char query[128] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+
+    char p[16];
+    uint8_t  r = 255, g = 255, b = 255;
+    int      curve       = RGB_LED_CURVE_EXPONENTIAL;
+    uint32_t duration_ms = 5000;
+    uint32_t step_ms     = 20;
+
+    if (httpd_query_key_value(query, "r",        p, sizeof(p)) == ESP_OK) r           = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "g",        p, sizeof(p)) == ESP_OK) g           = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "b",        p, sizeof(p)) == ESP_OK) b           = (uint8_t)atoi(p);
+    if (httpd_query_key_value(query, "curve",    p, sizeof(p)) == ESP_OK) curve       = atoi(p);
+    if (httpd_query_key_value(query, "duration", p, sizeof(p)) == ESP_OK) duration_ms = (uint32_t)atoi(p);
+    if (httpd_query_key_value(query, "step",     p, sizeof(p)) == ESP_OK) step_ms     = (uint32_t)atoi(p);
+
+    /* Lock AEC/AGC so the camera measures absolute brightness, not compensated. */
+    camera_lock_exposure();
+    rgb_led_fade_start(r, g, b, (rgb_led_curve_t)curve, duration_ms, step_ms);
+
+    /* Start brightness recording — capture loop calls wifi_stream_record_sample(). */
+    s_rec_count    = 0;
+    s_rec_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_rec_active   = true;
+
+    /* Spawn one-shot tasks: stop recording and unlock AE after fade ends. */
+    uint32_t *stop_ms = malloc(sizeof(uint32_t));
+    if (stop_ms) {
+        *stop_ms = duration_ms + 200;
+        xTaskCreate(rec_stop_task, "rec_stop", 2048, stop_ms, 3, NULL);
+    }
+    uint32_t *unlock_ms = malloc(sizeof(uint32_t));
+    if (unlock_ms) {
+        *unlock_ms = duration_ms + 500;
+        xTaskCreate(ae_unlock_task, "ae_unlock", 2048, unlock_ms, 3, NULL);
+    }
+
+    char resp[200];
+    snprintf(resp, sizeof(resp),
+             "{\"status\":\"ok\",\"curve\":%d,\"r\":%d,\"g\":%d,\"b\":%d,"
+             "\"duration_ms\":%lu,\"step_ms\":%lu}",
+             curve, r, g, b, (unsigned long)duration_ms, (unsigned long)step_ms);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_sendstr(req, resp);
+}
+
+/* HTTP handler for GET /snapshot – returns the latest JPEG frame.
+ * React Native's Image component polls this; each request completes quickly
+ * so the httpd is never blocked long-term. */
+static esp_err_t snapshot_handler(httpd_req_t *req)
+{
+    if (!s_frame_buf || !s_frame_mutex) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Not ready");
+        return ESP_FAIL;
+    }
+
+    uint8_t *local = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!local) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
+    size_t len = s_frame_len;
+    if (len > 0) memcpy(local, s_frame_buf, len);
+    xSemaphoreGive(s_frame_mutex);
+
+    if (len == 0) {
+        free(local);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No frame yet");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t ret = httpd_resp_send(req, (const char *)local, (ssize_t)len);
+    free(local);
+    return ret;
+}
+
+/* HTTP handler for GET / – full-screen MJPEG viewer with RN bridge messaging */
 static esp_err_t index_handler(httpd_req_t *req)
 {
-    const char *html =
-        "<html><body>"
-        "<h2>ESP32-CAM Stream</h2>"
-        "<img src='/stream' style='max-width:100%%'/>"
-        "</body></html>";
+    /* Single-quoted HTML inside a double-quoted C string — no escaping needed.
+     * The ReactNativeWebView bridge is injected by react-native-webview; the
+     * guard (window.ReactNativeWebView&&...) makes the page work in plain
+     * Safari too. */
+    static const char html[] =
+        "<!DOCTYPE html><html>"
+        "<head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1.0,maximum-scale=1.0'>"
+        "<style>"
+        "*{margin:0;padding:0;box-sizing:border-box}"
+        "body{background:#000;width:100vw;height:100vh;display:flex;"
+        "align-items:center;justify-content:center;overflow:hidden}"
+        "#s{max-width:100%;max-height:100%;object-fit:contain;display:block}"
+        "</style></head>"
+        "<body><img id='s' src='/stream'>"
+        "<script>"
+        "var img=document.getElementById('s');"
+        "var cv=document.createElement('canvas');"
+        "cv.width=8;cv.height=8;"
+        "var ctx=cv.getContext('2d'),last=null;"
+        "function poll(){"
+        "try{"
+        "ctx.drawImage(img,0,0,8,8);"
+        "var d=ctx.getImageData(0,0,8,8).data,h=0;"
+        "for(var i=0;i<d.length;i++)h=(h*31+d[i])|0;"
+        "if(last!==null&&h!==last&&window.ReactNativeWebView){"
+        "var br=0;"
+        "for(var j=0;j<d.length;j+=4)br+=d[j]*299+d[j+1]*587+d[j+2]*114;"
+        "window.ReactNativeWebView.postMessage(JSON.stringify({t:'f',b:Math.round(br/64000)}));"
+        "}"
+        "last=h;"
+        "}catch(e){}"
+        "requestAnimationFrame(poll);"
+        "}"
+        "img.onload=function(){"
+        "if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'ok'}));"
+        "poll();"
+        "};"
+        "img.onerror=function(){"
+        "if(window.ReactNativeWebView)"
+        "window.ReactNativeWebView.postMessage(JSON.stringify({t:'err'}));"
+        "};"
+        "</script></body></html>";
+
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, html);
+}
+
+/* HTTP handler for GET /record_result – returns brightness samples as JSON.
+ * {"active":false,"count":150,"samples":"0,245;100,240;..."}
+ * If recording is still in progress returns {"active":true,"count":0}. */
+static esp_err_t record_result_handler(httpd_req_t *req)
+{
+    if (s_rec_active) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        return httpd_resp_sendstr(req, "{\"active\":true,\"count\":0}");
+    }
+
+    int count = s_rec_count;
+
+    /* Each entry is at most "4294967295,255;" = 16 chars. */
+    size_t buf_size = (size_t)count * 16 + 64;
+    char *buf = malloc(buf_size);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    int pos = snprintf(buf, buf_size, "{\"active\":false,\"count\":%d,\"samples\":\"", count);
+    for (int i = 0; i < count; i++) {
+        pos += snprintf(buf + pos, buf_size - (size_t)pos,
+                        "%lu,%u%s",
+                        (unsigned long)s_rec_timestamps[i],
+                        (unsigned)s_rec_brightness[i],
+                        i < count - 1 ? ";" : "");
+    }
+    pos += snprintf(buf + pos, buf_size - (size_t)pos, "\"}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t ret = httpd_resp_sendstr(req, buf);
+    free(buf);
+    return ret;
 }
 
 esp_err_t wifi_stream_start(void)
 {
     /* Allocate the shared frame buffer. */
-    s_frame_buf = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_frame_buf   = heap_caps_malloc(MAX_JPEG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_frame_mutex = xSemaphoreCreateMutex();
-    if (!s_frame_buf || !s_frame_mutex) {
+    s_frame_ready = xSemaphoreCreateBinary();
+    if (!s_frame_buf || !s_frame_mutex || !s_frame_ready) {
         ESP_LOGE(TAG, "Failed to allocate stream resources");
         return ESP_ERR_NO_MEM;
     }
+
+    /* Disable WiFi power-save so the radio is always on — eliminates the
+     * latency spikes caused by DTIM sleep between beacons. */
+    esp_wifi_set_ps(WIFI_PS_NONE);
     s_frame_len = 0;
     s_frame_seq = 0;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port      = 80;
-    config.max_uri_handlers = 4;
+    config.max_uri_handlers = 10;
     /* Allow the stream handler to block in the URI handler task. */
-    config.stack_size       = 8192;
+    config.stack_size       = 16384;
     config.lru_purge_enable = true;
 
     ESP_ERROR_CHECK(httpd_start(&s_httpd, &config));
@@ -256,6 +514,27 @@ esp_err_t wifi_stream_start(void)
     };
     httpd_register_uri_handler(s_httpd, &index_uri);
 
-    ESP_LOGI(TAG, "HTTP server started. Stream at http://<ip>/stream");
+    httpd_uri_t record_uri = {
+        .uri     = "/record",
+        .method  = HTTP_GET,
+        .handler = record_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &record_uri);
+
+    httpd_uri_t snapshot_uri = {
+        .uri     = "/snapshot",
+        .method  = HTTP_GET,
+        .handler = snapshot_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &snapshot_uri);
+
+    httpd_uri_t record_result_uri = {
+        .uri     = "/record_result",
+        .method  = HTTP_GET,
+        .handler = record_result_handler,
+    };
+    httpd_register_uri_handler(s_httpd, &record_result_uri);
+
+    ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;
 }

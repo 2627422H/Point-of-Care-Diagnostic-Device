@@ -1,146 +1,92 @@
-import React from 'react';
-import { StyleSheet, View, Text } from 'react-native';
-import { WebView } from 'react-native-webview';
-import { Colors, FontSize } from '../constants/theme';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { StyleSheet, View, Image } from 'react-native';
 
 interface Props {
   streamUrl: string;
-  onFrame?: () => void;
+  onFrame?: (brightness: number) => void;
   onError?: (msg: string) => void;
   onStatus?: (msg: string) => void;
+  onBytes?: (total: number) => void;
 }
 
-/**
- * MjpegViewer — a VISIBLE WebView that:
- *  1. Shows the MJPEG stream full-width using an <img> tag (WKWebView / Safari
- *     engine handles MJPEG natively, same as tapping the URL in Safari)
- *  2. Uses canvas pixel sampling to detect frame changes and reports them
- *     back via postMessage so the parent can track FPS
- */
-const makeHtml = (url: string) => `<!DOCTYPE html><html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #000;
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    #stream {
-      max-width: 100%;
-      max-height: 100%;
-      object-fit: contain;
-      display: block;
-    }
-    #status {
-      position: fixed;
-      bottom: 8px;
-      left: 0; right: 0;
-      text-align: center;
-      color: rgba(255,255,255,0.6);
-      font-family: -apple-system, sans-serif;
-      font-size: 12px;
-    }
-    #error {
-      display: none;
-      color: #ff6b6b;
-      font-family: -apple-system, sans-serif;
-      font-size: 14px;
-      text-align: center;
-      padding: 20px;
-    }
-  </style>
-</head>
-<body>
-  <img id="stream" src="${url}" crossorigin="anonymous">
-  <canvas id="canvas" width="8" height="8" style="display:none"></canvas>
-  <div id="status">Connecting…</div>
-  <div id="error"></div>
-<script>
-var img    = document.getElementById('stream');
-var canvas = document.getElementById('canvas');
-var status = document.getElementById('status');
-var errorDiv = document.getElementById('error');
-var ctx    = canvas.getContext('2d');
-var last   = null;
-var frameCount = 0;
-var pollStarted = false;
+// Snapshot polling: fetches /snapshot each time the previous image finishes
+// loading. This naturally rate-limits to the device's actual throughput —
+// if a frame takes 300 ms over WiFi, we don't queue up a backlog of requests.
+// streamUrl is e.g. http://192.168.x.x/stream; we replace /stream → /snapshot.
+export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus, onBytes }: Props) {
+  const [tick, setTick] = useState(0);
+  const [reachable, setReachable] = useState(false);
+  const liveRef = useRef(true);
+  const loadingRef = useRef(false);   // true while a fetch is in flight
+  const totalBytesRef = useRef(0);
+  const snapshotBase = streamUrl.replace('/stream', '/snapshot');
 
-function sample() {
-  try {
-    ctx.drawImage(img, 0, 0, 8, 8);
-    var d = ctx.getImageData(0, 0, 8, 8).data;
-    var h = 0;
-    for (var i = 0; i < d.length; i++) h = (h * 31 + d[i]) | 0;
-    return h;
-  } catch(e) { return null; }
-}
+  useEffect(() => {
+    liveRef.current = true;
+    loadingRef.current = false;
+    totalBytesRef.current = 0;
+    setReachable(false);
+    setTick(0);
 
-function poll() {
-  var h = sample();
-  if (h !== null && last !== null && h !== last) {
-    frameCount++;
-    status.textContent = 'Frame ' + frameCount;
-    window.ReactNativeWebView.postMessage('frame');
-  }
-  if (h !== null) last = h;
-  requestAnimationFrame(poll);
-}
+    onStatus?.('Connecting…');
 
-img.onload = function() {
-  status.textContent = 'Stream connected';
-  window.ReactNativeWebView.postMessage('stream_ok');
-  if (!pollStarted) { pollStarted = true; poll(); }
-};
-
-img.onerror = function() {
-  img.style.display = 'none';
-  errorDiv.style.display = 'block';
-  errorDiv.textContent = 'Could not load stream. Make sure your phone and device are on the same WiFi network.';
-  status.style.display = 'none';
-  window.ReactNativeWebView.postMessage(JSON.stringify({ error: 'Stream failed to load: ' + img.src }));
-};
-</script>
-</body></html>`;
-
-export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: Props) {
-  function handleMessage(event: { nativeEvent: { data: string } }) {
-    const data = event.nativeEvent.data;
-    if (data === 'frame') {
-      onFrame?.();
-    } else if (data === 'stream_ok') {
-      onStatus?.('Stream connected');
-    } else {
-      try {
-        const payload = JSON.parse(data);
-        if (payload.error) {
-          onError?.(payload.error);
-          onStatus?.('error: ' + payload.error);
+    const ctrl = new AbortController();
+    fetch(`${snapshotBase}?t=probe`, { signal: ctrl.signal })
+      .then((res) => {
+        if (!liveRef.current) return;
+        if (!res.ok) { onError?.(`Device returned HTTP ${res.status}`); return; }
+        const cl = res.headers.get('content-length');
+        if (cl) { totalBytesRef.current += parseInt(cl, 10); onBytes?.(totalBytesRef.current); }
+        onStatus?.('Stream connected');
+        setReachable(true);
+      })
+      .catch((e) => {
+        if (liveRef.current && e?.name !== 'AbortError') {
+          onError?.(`Cannot reach device: ${e?.message ?? 'network error'}`);
         }
-      } catch {}
-    }
-  }
+      });
+
+    return () => {
+      liveRef.current = false;
+      ctrl.abort();
+    };
+  }, [streamUrl]);
+
+  // Called when the Image finishes loading — immediately request the next frame.
+  const handleLoad = useCallback(() => {
+    loadingRef.current = false;
+    onFrame?.(128);
+    if (liveRef.current) setTick((t) => t + 1);
+  }, [onFrame]);
+
+  // Called when the Image fails — wait 200 ms then retry.
+  const handleError = useCallback((e: any) => {
+    loadingRef.current = false;
+    onError?.(e.nativeEvent?.error ?? 'image load error');
+    if (liveRef.current) setTimeout(() => { if (liveRef.current) setTick((t) => t + 1); }, 200);
+  }, [onError]);
+
+  // Kick off the very first load once reachable.
+  useEffect(() => {
+    if (!reachable) return;
+    loadingRef.current = true;
+    setTick(1);
+  }, [reachable]);
+
+  const uri = reachable && tick > 0 ? `${snapshotBase}?t=${tick}` : null;
 
   return (
     <View style={styles.container}>
-      <WebView
-        source={{ html: makeHtml(streamUrl) }}
-        style={styles.webview}
-        onMessage={handleMessage}
-        originWhitelist={['*']}
-        mixedContentMode="always"
-        javaScriptEnabled
-        scrollEnabled={false}
-        bounces={false}
-        allowsInlineMediaPlayback
-        mediaPlaybackRequiresUserAction={false}
-      />
+      {uri && (
+        <Image
+          source={{ uri }}
+          style={styles.image}
+          resizeMode="contain"
+          fadeDuration={0}
+          onLoad={handleLoad}
+          onError={handleError}
+        />
+      )}
     </View>
   );
 }
@@ -148,13 +94,13 @@ export default function MjpegViewer({ streamUrl, onFrame, onError, onStatus }: P
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    aspectRatio: 800 / 640,   /* matches CAM_H_RES / CAM_V_RES in camera.c */
+    aspectRatio: 800 / 640,
     backgroundColor: '#000',
     borderRadius: 12,
     overflow: 'hidden',
   },
-  webview: {
-    flex: 1,
-    backgroundColor: '#000',
+  image: {
+    width: '100%',
+    height: '100%',
   },
 });

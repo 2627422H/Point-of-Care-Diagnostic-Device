@@ -10,14 +10,24 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Device from 'expo-device';
 import { Colors, Spacing, Radius, FontSize } from '../../constants/theme';
 import ConnectionBadge from '../../components/ConnectionBadge';
 import MjpegViewer from '../../components/MjpegViewer';
 import MjpegAnalyzer from '../../components/MjpegAnalyzer';
+import BrightnessChart from '../../components/BrightnessChart';
 import { useAppStore } from '../../store/useAppStore';
 import { useStreamSession, type StreamPhase } from '../../hooks/useStreamSession';
+
+const CURVES = [
+  { label: 'Exponential', value: 1 as const },
+  { label: 'Linear',      value: 0 as const },
+  { label: 'Logarithmic', value: 2 as const },
+  { label: 'Sigmoid',     value: 3 as const },
+] as const;
 
 const PHASE_LABEL: Record<StreamPhase, string> = {
   idle:          'READY',
@@ -52,8 +62,14 @@ export default function NewTestScreen() {
     connectStatus,
     bleMode,
     bytesReceived,
+    setBytesReceived,
     useWebViewMode,
     webViewStatus,
+    recordingState,
+    recordingProgress,
+    recordingFetching,
+    recordingError,
+    recordingResult,
     start,
     stop,
     reset,
@@ -61,11 +77,24 @@ export default function NewTestScreen() {
     enableWebView,
     handleWebViewFrame,
     handleWebViewStatus,
+    startRecording,
+    resetRecording,
   } = useStreamSession();
 
-  const [ssid,         setSsid]         = useState('');
-  const [password,     setPassword]     = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [ssid,           setSsid]           = useState('');
+  const [password,       setPassword]       = useState('');
+  const [showPassword,   setShowPassword]   = useState(false);
+  const [selectedCurve,  setSelectedCurve]  = useState<0|1|2|3>(1);
+  const [duration,       setDuration]       = useState('10000');
+
+  function handleUseHotspot() {
+    const name = Device.deviceName ?? '';
+    if (name) setSsid(name);
+    // Open Personal Hotspot settings so the user can check/copy their password.
+    Linking.openURL('App-Prefs:Personal_Hotspot').catch(() =>
+      Linking.openURL('app-settings:')
+    );
+  }
 
   /* Manual IP fallback — lets user type the IP directly if BLE provisioning
    * delivers the wrong address or the stream URL isn't being set. */
@@ -171,6 +200,7 @@ export default function NewTestScreen() {
                 onFrame={handleWebViewFrame}
                 onError={(msg) => handleWebViewStatus('error: ' + msg)}
                 onStatus={handleWebViewStatus}
+                onBytes={setBytesReceived}
               />
               <View style={styles.streamStats}>
                 <Text style={styles.streamStat}>
@@ -182,12 +212,130 @@ export default function NewTestScreen() {
                   {fps}
                 </Text>
                 <Text style={styles.streamStat} numberOfLines={1}>
-                  <Text style={styles.streamStatLabel}>URL: </Text>
-                  {displayUrl}
+                  <Text style={styles.streamStatLabel}>Viewer: </Text>
+                  {displayUrl?.replace('/stream', '/')}
                 </Text>
               </View>
             </View>
           ) : null}
+
+          {/* ── RECORDING PANEL ── */}
+          {isStreaming && displayUrl && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>RECORD SESSION</Text>
+
+              {recordingState === 'idle' && (
+                <>
+                  <Text style={styles.fieldLabel}>Brightness curve</Text>
+                  <View style={styles.curveRow}>
+                    {CURVES.map((c) => (
+                      <TouchableOpacity
+                        key={c.value}
+                        style={[styles.curveChip, selectedCurve === c.value && styles.curveChipActive]}
+                        onPress={() => setSelectedCurve(c.value)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[styles.curveChipText, selectedCurve === c.value && styles.curveChipTextActive]}>
+                          {c.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.fieldLabel}>Duration (ms)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={duration}
+                    onChangeText={setDuration}
+                    keyboardType="number-pad"
+                    placeholderTextColor={Colors.textMuted}
+                  />
+
+                  {recordingError && (
+                    <View style={styles.recordingErrorRow}>
+                      <Ionicons name="alert-circle-outline" size={16} color={Colors.primaryDark} />
+                      <Text style={styles.recordingErrorText}>{recordingError}</Text>
+                    </View>
+                  )}
+
+                  <TouchableOpacity
+                    style={[styles.submitButton, recordingFetching && styles.submitButtonDisabled]}
+                    onPress={() => startRecording({
+                      curve: selectedCurve,
+                      duration: parseInt(duration, 10) || 10000,
+                      displayUrl,
+                    })}
+                    disabled={recordingFetching}
+                    activeOpacity={0.8}
+                  >
+                    {recordingFetching
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={styles.submitLabel}>START RECORDING</Text>
+                    }
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {recordingState === 'active' && (
+                <View style={styles.recordingActive}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.recordingLabel}>Recording…</Text>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${recordingProgress * 100}%` }]} />
+                  </View>
+                  <Text style={styles.recordingPct}>{Math.round(recordingProgress * 100)}%</Text>
+                </View>
+              )}
+
+              {recordingState === 'done' && recordingResult && (
+                <View style={styles.recordingDone}>
+                  <View style={styles.recordingDoneHeader}>
+                    <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
+                    <Text style={styles.recordingDoneTitle}>Recording complete</Text>
+                  </View>
+
+                  <View style={styles.recordingSummary}>
+                    {[
+                      ['Curve',    CURVES.find(c => c.value === recordingResult.curve)?.label ?? '—'],
+                      ['Duration', `${(recordingResult.durationMs / 1000).toFixed(1)} s`],
+                      ['Frames',   String(recordingResult.framesCapured)],
+                      ['Avg FPS',  recordingResult.durationActualMs > 0
+                        ? (recordingResult.framesCapured / (recordingResult.durationActualMs / 1000)).toFixed(1)
+                        : '—'],
+                    ].map(([label, value]) => (
+                      <View key={label} style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>{label}</Text>
+                        <Text style={styles.summaryValue}>{value}</Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Text style={styles.recordingCurveDesc}>
+                    {recordingResult.curve === 0 && 'Linear: LED dimmed at a constant rate over the session.'}
+                    {recordingResult.curve === 1 && 'Exponential: fast initial drop to a long dim tail — models reagent absorption.'}
+                    {recordingResult.curve === 2 && 'Logarithmic: steep drop in first 20 % then slow fade out.'}
+                    {recordingResult.curve === 3 && 'Sigmoid: gradual start, fast mid-point transition, gradual end.'}
+                  </Text>
+
+                  {recordingResult.brightnessData.length >= 2 && (
+                    <BrightnessChart
+                      data={recordingResult.brightnessData}
+                      durationMs={recordingResult.durationActualMs}
+                    />
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.recordAgainButton}
+                    onPress={resetRecording}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="refresh" size={16} color={Colors.primary} />
+                    <Text style={styles.recordAgainText}>Record again</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          )}
 
           {/* Manual IP entry — shown while streaming if stream URL not set,
               or toggled by the user if the stream appears blank */}
@@ -263,8 +411,15 @@ export default function NewTestScreen() {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>WiFi Setup</Text>
               <Text style={styles.cardDesc}>
-                Enter your WiFi credentials once. They will be stored and used automatically.
+                The device needs to join the same network as your phone.
               </Text>
+
+              {/* Hotspot shortcut */}
+              <TouchableOpacity style={styles.hotspotButton} onPress={handleUseHotspot} activeOpacity={0.8}>
+                <Ionicons name="phone-portrait-outline" size={18} color={Colors.primary} />
+                <Text style={styles.hotspotLabel}>Use this phone's hotspot</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+              </TouchableOpacity>
 
               <Text style={styles.fieldLabel}>Network name (SSID)</Text>
               <TextInput
@@ -520,6 +675,87 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   graphPlaceholderText: { fontSize: FontSize.sm, color: Colors.textMuted },
+
+  hotspotButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.sectionBackground,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  hotspotLabel: { flex: 1, fontSize: FontSize.sm, fontWeight: '600', color: Colors.primary },
+
+  curveRow:          { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  curveChip: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  curveChipActive:    { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  curveChipText:      { fontSize: FontSize.sm, color: Colors.text, fontWeight: '600' },
+  curveChipTextActive:{ color: '#fff' },
+
+  recordingErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    backgroundColor: '#FEE2E2',
+    borderRadius: Radius.sm,
+    padding: Spacing.sm,
+  },
+  recordingErrorText: { flex: 1, fontSize: FontSize.sm, color: Colors.primaryDark },
+
+  recordingActive: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
+  recordingLabel:  { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },
+  recordingPct:    { fontSize: FontSize.sm, color: Colors.textSecondary },
+
+  recordingDone: { gap: Spacing.sm, paddingVertical: Spacing.xs },
+  recordingDoneHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  recordingDoneTitle:  { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
+
+  recordingSummary: {
+    backgroundColor: Colors.sectionBackground,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    gap: 4,
+  },
+  summaryRow:   { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
+  summaryLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: '500' },
+  summaryValue: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
+
+  recordingCurveDesc: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: 17,
+    fontStyle: 'italic',
+  },
+
+  recordAgainButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    alignSelf: 'flex-start',
+    paddingTop: Spacing.xs,
+  },
+  recordAgainText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
+  progressBar: {
+    width: '100%',
+    height: 6,
+    backgroundColor: Colors.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: Colors.primary,
+    borderRadius: 3,
+  },
 
   step: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
   stepBadge: {

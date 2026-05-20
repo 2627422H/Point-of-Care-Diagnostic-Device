@@ -1,4 +1,5 @@
 #include "ble_server.h"
+#include "rgb_led.h"
 
 #include <string.h>
 #include <assert.h>
@@ -170,9 +171,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             ESP_LOGI(TAG, "Connected, conn_handle=%d", s_conn_handle);
             ble_att_set_preferred_mtu(512);
             ble_gattc_exchange_mtu(s_conn_handle, NULL, NULL);
+            rgb_led_blue();   /* solid blue = phone connected */
         } else {
             ESP_LOGW(TAG, "Connection failed, resuming advertising");
             start_advertising();
+            rgb_led_pulse_start(0, 0, 255, 1500);  /* back to blue pulse */
         }
         break;
 
@@ -183,6 +186,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         /* Only re-advertise if we haven't handed off to WiFi yet. */
         if (!s_credentials_received) {
             start_advertising();
+            rgb_led_pulse_start(0, 0, 255, 1500);  /* blue pulse = advertising again */
         }
         break;
 

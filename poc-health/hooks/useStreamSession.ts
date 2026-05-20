@@ -239,7 +239,7 @@ export function useStreamSession() {
       const url = `http://${ip}/stream`;
       setStreamUrl(url);
       console.log('[stream] Stream URL set to:', url);
-      startFetchStream(url);
+      // MjpegViewer (WebView) handles display and frame counting — no fetch stream needed.
       safeSetPhase('streaming');
     } catch (err: any) {
       if (!cancelledRef.current) {
@@ -257,9 +257,15 @@ export function useStreamSession() {
     setWebViewStatus('WebView mounting…');
   }, []);
 
-  const handleWebViewFrame = useCallback(() => {
+  const handleWebViewFrame = useCallback((brightness: number) => {
     frameCountRef.current += 1;
     setFrameCount(frameCountRef.current);
+    if (recordingActiveRef.current) {
+      brightnessRef.current.push({
+        t: Date.now() - recordingStartTimeRef.current,
+        b: brightness,
+      });
+    }
   }, []);
 
   const handleWebViewStatus = useCallback((msg: string) => {
@@ -366,6 +372,8 @@ export function useStreamSession() {
   const reset = useCallback(() => {
     cancelledRef.current = true;
     useWebViewRef.current = false;
+    recordingActiveRef.current = false;
+    brightnessRef.current = [];
     stopStream();
     getBle()?.stopDeviceScan();
     deviceRef.current?.cancelConnection().catch(() => {});
@@ -384,6 +392,132 @@ export function useStreamSession() {
     setBleMode(false);
   }, []);
 
+  // ── Recording session ────────────────────────────────────────────────────
+  const [recordingState, setRecordingState] = useState<'idle' | 'active' | 'done'>('idle');
+  const [recordingProgress, setRecordingProgress] = useState(0);
+  const [recordingFetching, setRecordingFetching] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [recordingResult, setRecordingResult] = useState<{
+    curve: 0 | 1 | 2 | 3;
+    durationMs: number;
+    framesCapured: number;
+    durationActualMs: number;
+    brightnessData: { t: number; b: number }[];
+  } | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartFrameRef = useRef(0);
+  const recordingStartTimeRef = useRef(0);
+  const recordingActiveRef = useRef(false);
+  const brightnessRef = useRef<{ t: number; b: number }[]>([]);
+
+  const startRecording = useCallback(async (params: {
+    curve: 0 | 1 | 2 | 3;
+    duration: number;
+    r?: number; g?: number; b?: number;
+    step?: number;
+    displayUrl?: string | null;  // caller passes the URL actually being displayed
+  }) => {
+    setRecordingError(null);
+
+    // Prefer the caller's displayUrl (handles manual IP override), fall back to hook streamUrl
+    const base = (params.displayUrl ?? streamUrl ?? '')
+      .replace('/stream', '')
+      .replace(/\/$/, '');
+    if (!base) {
+      setRecordingError('No device URL — connect to the device first');
+      return;
+    }
+
+    const { curve, duration, r = 255, g = 255, b = 255, step = 10 } = params;
+    const url = `${base}/record?curve=${curve}&r=${r}&g=${g}&b=${b}&duration=${duration}&step=${step}`;
+
+    setRecordingFetching(true);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+      } catch (err: any) {
+        clearTimeout(timeout);
+        throw err;
+      }
+      if (!res.ok) {
+        setRecordingError(`Device returned HTTP ${res.status}`);
+        setRecordingFetching(false);
+        return;
+      }
+    } catch (err: any) {
+      setRecordingError(`Could not reach device: ${err?.message ?? 'network error'}`);
+      setRecordingFetching(false);
+      return;
+    }
+    setRecordingFetching(false);
+
+    recordingStartFrameRef.current = frameCountRef.current;
+    recordingStartTimeRef.current = Date.now();
+    brightnessRef.current = [];
+    recordingActiveRef.current = true;
+    setRecordingState('active');
+    setRecordingProgress(0);
+    setRecordingResult(null);
+
+    const start = recordingStartTimeRef.current;
+    recordingTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const progress = Math.min(elapsed / duration, 1);
+      setRecordingProgress(progress);
+      if (progress >= 1) {
+        clearInterval(recordingTimerRef.current!);
+        recordingTimerRef.current = null;
+        recordingActiveRef.current = false;
+
+        const framesCapured = frameCountRef.current - recordingStartFrameRef.current;
+        const durationActualMs = Date.now() - start;
+
+        // Fetch device-measured brightness data (raw pixels, accurate timestamps).
+        const resultBase = (params.displayUrl ?? streamUrl ?? '')
+          .replace('/stream', '').replace(/\/$/, '');
+
+        if (resultBase) {
+          fetch(`${resultBase}/record_result`)
+            .then((r) => r.json())
+            .then((json: { active: boolean; count: number; samples: string }) => {
+              let brightnessData: { t: number; b: number }[] = [];
+              if (!json.active && json.count > 0 && json.samples) {
+                brightnessData = json.samples.split(';').map((s) => {
+                  const [t, b] = s.split(',').map(Number);
+                  return { t, b };
+                });
+              }
+              setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData });
+              setRecordingState('done');
+            })
+            .catch(() => {
+              setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
+              setRecordingState('done');
+            });
+        } else {
+          setRecordingResult({ curve, durationMs: duration, framesCapured, durationActualMs, brightnessData: [] });
+          setRecordingState('done');
+        }
+      }
+    }, 100);
+  }, [streamUrl]);
+
+  const resetRecording = useCallback(() => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    recordingTimerRef.current = null;
+    recordingActiveRef.current = false;
+    brightnessRef.current = [];
+    setRecordingState('idle');
+    setRecordingProgress(0);
+    setRecordingResult(null);
+    setRecordingError(null);
+    setRecordingFetching(false);
+  }, []);
+
   const fps = frameCount > 0
     ? (frameCount / Math.max(1, (Date.now() - streamStartRef.current) / 1000)).toFixed(1)
     : '0.0';
@@ -391,8 +525,10 @@ export function useStreamSession() {
   return {
     phase, streamUrl, frameCount, fps,
     errorMessage, streamError, connectStatus, bleMode,
-    bytesReceived, useWebViewMode, webViewStatus,
+    bytesReceived, setBytesReceived, useWebViewMode, webViewStatus,
+    recordingState, recordingProgress, recordingFetching, recordingError, recordingResult,
     start, stop, reset, submitWifiCredentials,
     enableWebView, handleWebViewFrame, handleWebViewStatus,
+    startRecording, resetRecording,
   };
 }
