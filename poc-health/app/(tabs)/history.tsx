@@ -315,10 +315,15 @@ export default function HistoryScreen() {
             {/* Trend chart */}
             {hasEnoughForChart ? (
               <View style={styles.chartCard}>
-                <Text style={styles.sectionLabel}>ESTROGEN TREND</Text>
+                <Text style={styles.sectionLabel}>ESTROGEN TREND — LAST 3 MONTHS</Text>
                 <LineChart
                   data={{
-                    labels: chartData.map(r => `D${r.cycleDay}`),
+                    labels: chartData.map((r, i) => {
+                      if (i === 0) return new Date(r.timestamp).toLocaleDateString('en-US', { month: 'short' });
+                      const prev = new Date(chartData[i - 1].timestamp).getMonth();
+                      const cur  = new Date(r.timestamp).getMonth();
+                      return cur !== prev ? new Date(r.timestamp).toLocaleDateString('en-US', { month: 'short' }) : '';
+                    }),
                     datasets: [{ data: chartData.map(r => r.estrogenLevel) }],
                   }}
                   width={SCREEN_WIDTH - Spacing.md * 4}
@@ -330,11 +335,21 @@ export default function HistoryScreen() {
                     decimalPlaces: 0,
                     color: (opacity = 1) => `rgba(200,84,80,${opacity})`,
                     labelColor: () => Colors.textSecondary,
-                    propsForDots: { r: '4', strokeWidth: '2', stroke: Colors.primary },
+                    propsForDots: { r: '5', strokeWidth: '0' },
                   }}
                   bezier
                   style={styles.chart}
                   withInnerLines={false}
+                  onDataPointClick={({ index }) => {
+                    const r = chartData[index];
+                    if (r) setExpandedId(prev => prev === r.id ? null : r.id);
+                  }}
+                  getDotColor={(_, index) => {
+                    const r = chartData[index];
+                    if (!r) return Colors.primary;
+                    if (r.id === expandedId) return Colors.primaryDark;
+                    return estrogenBadgeColor(r.estrogenLevel);
+                  }}
                 />
               </View>
             ) : (

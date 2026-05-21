@@ -4,7 +4,6 @@ import {
   Text,
   ScrollView,
   StyleSheet,
-  SafeAreaView,
   TextInput,
   TouchableOpacity,
   Image,
@@ -12,6 +11,9 @@ import {
   ActionSheetIOS,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,12 +32,12 @@ interface ProfileData {
 }
 
 const DEFAULT_PROFILE: ProfileData = {
-  name: '',
+  name: 'Sarah Mitchell',
   photoUri: null,
   cycleLength: 28,
-  height: null,
-  weight: null,
-  age: null,
+  height: 165,
+  weight: 62,
+  age: 28,
 };
 
 async function loadProfile(): Promise<ProfileData> {
@@ -128,25 +130,46 @@ export default function ProfileScreen() {
   }
 
   async function pickPhoto() {
-    const action = await new Promise<'camera' | 'library' | 'cancel'>((resolve) => {
+    const hasPhoto = !!profile.photoUri;
+
+    const action = await new Promise<'camera' | 'library' | 'remove' | 'cancel'>((resolve) => {
       if (Platform.OS === 'ios') {
+        const options = hasPhoto
+          ? ['Take Photo', 'Choose from Library', 'Remove Photo', 'Cancel']
+          : ['Take Photo', 'Choose from Library', 'Cancel'];
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ['Take Photo', 'Choose from Library', 'Cancel'],
-            cancelButtonIndex: 2,
+            options,
+            cancelButtonIndex: options.length - 1,
+            destructiveButtonIndex: hasPhoto ? 2 : undefined,
           },
-          (i) => resolve(i === 0 ? 'camera' : i === 1 ? 'library' : 'cancel')
+          (i) => {
+            if (hasPhoto) {
+              resolve(i === 0 ? 'camera' : i === 1 ? 'library' : i === 2 ? 'remove' : 'cancel');
+            } else {
+              resolve(i === 0 ? 'camera' : i === 1 ? 'library' : 'cancel');
+            }
+          }
         );
       } else {
-        Alert.alert('Profile Photo', 'Choose a source', [
+        const buttons: Parameters<typeof Alert.alert>[2] = [
           { text: 'Camera',  onPress: () => resolve('camera') },
           { text: 'Library', onPress: () => resolve('library') },
-          { text: 'Cancel',  onPress: () => resolve('cancel'), style: 'cancel' },
-        ]);
+        ];
+        if (hasPhoto) {
+          buttons.push({ text: 'Remove Photo', onPress: () => resolve('remove'), style: 'destructive' });
+        }
+        buttons.push({ text: 'Cancel', onPress: () => resolve('cancel'), style: 'cancel' });
+        Alert.alert('Profile Photo', 'Choose a source', buttons);
       }
     });
 
     if (action === 'cancel') return;
+
+    if (action === 'remove') {
+      update({ photoUri: null });
+      return;
+    }
 
     if (action === 'camera') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -155,8 +178,9 @@ export default function ProfileScreen() {
         return;
       }
     } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
+      const { status, accessPrivileges } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      // accessPrivileges === 'limited' means the user chose specific photos on iOS 14+
+      if (status !== 'granted' && accessPrivileges !== 'limited') {
         Alert.alert('Permission needed', 'Photo library access is required to choose a photo.');
         return;
       }
@@ -176,6 +200,50 @@ export default function ProfileScreen() {
 
     if (!result.canceled && result.assets[0]) {
       update({ photoUri: result.assets[0].uri });
+    }
+  }
+
+  async function exportData() {
+    if (results.length === 0) {
+      Alert.alert('No data', 'Run at least one test before exporting.');
+      return;
+    }
+
+    const header = 'Date,Cycle Day,Estrogen (pg/ml),Cramping,Bloating,Fatigue,Mood Changes';
+    const rows = [...results]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((r) => {
+        const date = new Date(r.timestamp).toLocaleDateString('en-US', {
+          year: 'numeric', month: 'short', day: 'numeric',
+        });
+        const get = (name: string) =>
+          r.symptoms.find((s) => s.name === name)?.severity ?? '';
+        return [
+          date,
+          r.cycleDay,
+          r.estrogenLevel,
+          get('Cramping'),
+          get('Bloating'),
+          get('Fatigue'),
+          get('Mood changes'),
+        ].join(',');
+      });
+
+    const csv = [header, ...rows].join('\n');
+    const fileName = `poc_health_${new Date().toISOString().slice(0, 10)}.csv`;
+    const fileUri = FileSystem.cacheDirectory + fileName;
+
+    try {
+      await FileSystem.writeAsStringAsync(fileUri, csv, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'text/csv',
+        dialogTitle: 'Export POC Health Data',
+        UTI: 'public.comma-separated-values-text',
+      });
+    } catch {
+      Alert.alert('Export failed', 'Could not export data. Please try again.');
     }
   }
 
@@ -271,6 +339,12 @@ export default function ProfileScreen() {
             <StatRow label="BMI" value={`${bmi} — ${bmiLabel(bmi)}`} />
           )}
         </View>
+
+        {/* ── Export ── */}
+        <TouchableOpacity style={styles.exportBtn} onPress={exportData} activeOpacity={0.8}>
+          <Ionicons name="share-outline" size={18} color="#fff" />
+          <Text style={styles.exportBtnText}>Export Data</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -415,5 +489,19 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: '700',
     color: Colors.primary,
+  },
+  exportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.md,
+  },
+  exportBtnText: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: '#fff',
   },
 });

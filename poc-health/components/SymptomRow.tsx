@@ -8,9 +8,9 @@ type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const severityColor: Record<string, string> = {
   None: Colors.textMuted,
-  Mild: Colors.primaryLight,
-  Moderate: Colors.primary,
-  High: Colors.primaryDark,
+  Mild: '#FFA726',
+  Moderate: '#EF6C00',
+  High: Colors.primary,
 };
 
 interface Props {

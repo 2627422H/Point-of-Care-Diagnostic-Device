@@ -76,7 +76,7 @@ const SECTIONS: Section[] = [
     items: [
       {
         q: 'The app cannot find my device',
-        a: 'Make sure Bluetooth is enabled on your phone and the POC device is powered on (LED indicator should be lit). Try moving closer to the device and tapping RETRY. If the problem persists, restart both the device and the app.',
+        a: 'Make sure Bluetooth is enabled on your phone and the POC device is powered on (LED should be lit). Try moving closer to the device and tapping RETRY. If the problem persists, restart both the device and the app.',
       },
       {
         q: 'The test failed with an error',

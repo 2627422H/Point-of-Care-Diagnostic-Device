@@ -158,7 +158,10 @@ export default function NewTestScreen() {
         >
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.brand}>POC Health</Text>
+            <View>
+              <Text style={styles.brand}>POC Health</Text>
+              <Text style={styles.dateLabel}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</Text>
+            </View>
             <ConnectionBadge state={connectionState} batteryPercent={device?.batteryPercent} />
           </View>
 
@@ -602,7 +605,8 @@ const styles = StyleSheet.create({
   flex:    { flex: 1 },
   content: { padding: Spacing.md, gap: Spacing.md, paddingBottom: Spacing.xl },
   header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  brand:   { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
+  brand:     { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
+  dateLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
 
   statusRow: {
     flexDirection: 'row',
